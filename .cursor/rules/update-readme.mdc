@@ -1,0 +1,22 @@
+---
+description: Always update README.md after making code changes to track progress for LLM continuity
+alwaysApply: true
+---
+
+# Update README on Changes
+
+After making ANY code changes, bug fixes, or new approaches to the InstaMAT2Remix plugin:
+
+1. Update the **Changelog / Session Log** section in `README.md` with:
+   - Date and brief session description
+   - What was tried
+   - What worked / didn't work
+   - Current status of the auto-project-creation blocker
+
+2. If a new approach is tried for the UI automation blocker, update:
+   - **Full History of Approaches Tried** section
+   - **What Has NOT Worked** or **What HAS Worked** tables
+   - **Current Blocker** section if status changes
+   - **For LLM Assistants Reading This** section if new findings emerge
+
+3. Keep the README as the single source of truth so any LLM can pick up where we left off.
