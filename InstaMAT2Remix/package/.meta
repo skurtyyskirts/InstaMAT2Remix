@@ -1,0 +1,15 @@
+{
+  "ID" : "e5fd26e7-baa1-45f0-bd88-de047bde0d6e",
+  "Meta" : {
+    "Author" : "InstaMAT2Remix",
+    "URL" : "https://github.com/NVIDIAGameWorks/RTX-Remix"
+  },
+  "MinimumVersion" : 131072,
+  "Name" : "InstaMAT2Remix",
+  "ResourceMeta" : {
+    "InstaMAT2RemixPlugin.dll" : {
+      "ImportPath" : "InstaMAT2RemixPlugin.dll"
+    }
+  }
+}
+

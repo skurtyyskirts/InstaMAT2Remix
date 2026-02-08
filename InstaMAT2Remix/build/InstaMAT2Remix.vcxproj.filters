@@ -1,0 +1,96 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="C:\Users\skurtyy\Desktop\instamatgem3\InstaMAT2Remix\build\InstaMAT2Remix_autogen\mocs_compilation_Debug.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\skurtyy\Desktop\instamatgem3\InstaMAT2Remix\PluginMain.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\skurtyy\Desktop\instamatgem3\InstaMAT2Remix\CExports.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\skurtyy\Desktop\instamatgem3\InstaMAT2Remix\RemixConnector.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\skurtyy\Desktop\instamatgem3\InstaMAT2Remix\RemixNodes.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\skurtyy\Desktop\instamatgem3\InstaMAT2Remix\GuiManager.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\skurtyy\Desktop\instamatgem3\InstaMAT2Remix\ExternalTools.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\skurtyy\Desktop\instamatgem3\InstaMAT2Remix\SettingsDialog.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\skurtyy\Desktop\instamatgem3\InstaMAT2Remix\DiagnosticsDialog.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\skurtyy\Desktop\instamatgem3\InstaMAT2Remix\PluginPaths.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\skurtyy\Desktop\instamatgem3\InstaMAT2Remix\Logger.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\skurtyy\Desktop\instamatgem3\InstaMAT2Remix\build\InstaMAT2Remix_autogen\mocs_compilation_Release.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\skurtyy\Desktop\instamatgem3\InstaMAT2Remix\build\InstaMAT2Remix_autogen\mocs_compilation_MinSizeRel.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\skurtyy\Desktop\instamatgem3\InstaMAT2Remix\build\InstaMAT2Remix_autogen\mocs_compilation_RelWithDebInfo.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="C:\Users\skurtyy\Desktop\instamatgem3\InstaMAT2Remix\RemixConnector.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\skurtyy\Desktop\instamatgem3\InstaMAT2Remix\RemixNodes.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\skurtyy\Desktop\instamatgem3\InstaMAT2Remix\GuiManager.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\skurtyy\Desktop\instamatgem3\InstaMAT2Remix\ExternalTools.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\skurtyy\Desktop\instamatgem3\InstaMAT2Remix\Utils.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\skurtyy\Desktop\instamatgem3\InstaMAT2Remix\SettingsDialog.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\skurtyy\Desktop\instamatgem3\InstaMAT2Remix\DiagnosticsDialog.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\skurtyy\Desktop\instamatgem3\InstaMAT2Remix\PluginPaths.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\skurtyy\Desktop\instamatgem3\InstaMAT2Remix\PluginInfo.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\skurtyy\Desktop\instamatgem3\InstaMAT2Remix\Logger.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\skurtyy\Desktop\instamatgem3\InstaMAT2Remix\InstaMATAPI.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\skurtyy\Desktop\instamatgem3\InstaMAT2Remix\InstaMATPluginAPI.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\skurtyy\Desktop\instamatgem3\InstaMAT2Remix\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{EB4385E2-B0E4-3E08-B843-A43BD02E6D73}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{169A900B-0F85-38B3-9F99-9D359CFA8777}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>
