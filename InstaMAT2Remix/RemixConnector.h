@@ -81,8 +81,5 @@ namespace InstaMAT2Remix {
         std::string m_remixApiBaseUrl;
         std::string m_linkedMaterialPrim;
         std::string m_linkedMeshPath;
-        
-        // Automation state tracking
-        bool m_isAutoCreatingProject = false;
     };
 }

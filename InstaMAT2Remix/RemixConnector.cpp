@@ -1587,19 +1587,112 @@ namespace InstaMAT2Remix {
                 << "mesh=" << meshPathAbs << "name=" << suggestedName;
 
             // If we're on the chooser screen, click Asset Texturing and wait for the actual wizard UI.
+            //
+            // CRITICAL: Clicking "Asset Texturing" may open the project wizard via
+            // QDialog::exec(), which starts a blocking nested event loop. Any code
+            // placed after the click would only execute AFTER the dialog closes.
+            //
+            // Solution: Schedule the wizard-filling code via QTimer::singleShot BEFORE
+            // clicking, so it fires from WITHIN the dialog's event loop while the
+            // wizard is still open and interactive (same pattern as Case 2 in
+            // TryCreateTexturingProjectFromMesh, per InstaMAT dev team guidance).
+            //
+            // NOTE: InstaMAT's New Project dialog is QML-based. QWidget detection
+            // (FindAssetTexturingButton/FindProjectTypeItemView) often fails.
+            // When that happens we must NOT schedule a dangling timer — instead we
+            // fall through cleanly to the accessibility/QML fallback path below.
             if (!wizardRoot && chooserRoot) {
-                QString activateErr;
-                if (!ActivateProjectTypeAssetTexturing(chooserRoot, &activateErr)) {
-                    qInfo().noquote() << "[InstaMAT2Remix] QWidget activation failed:" << activateErr
-                        << "- falling back to accessibility automation.";
-                    // QWidget activation failed — don't return false yet, try accessibility below.
-                } else {
-                    const qint64 wizardDeadline = QDateTime::currentMSecsSinceEpoch() + 10000;
-                    while (QDateTime::currentMSecsSinceEpoch() < wizardDeadline) {
-                        wizardRoot = FindProjectWizardRoot(win);
-                        if (wizardRoot) break;
+                // Probe: check if QWidget-based elements exist before scheduling timer.
+                QAbstractButton* probeBtn = FindAssetTexturingButton(chooserRoot);
+                QAbstractItemView* probeView = probeBtn ? nullptr : FindProjectTypeItemView(chooserRoot);
+                const bool hasQWidgetControls = (probeBtn != nullptr || probeView != nullptr);
+
+                if (hasQWidgetControls) {
+                    // QWidget controls found — use QTimer pattern because clicking
+                    // may trigger QDialog::exec() which would block our code.
+                    qInfo().noquote() << "[InstaMAT2Remix]"
+                        << "Chooser has QWidget controls; using QTimer+click pattern.";
+
+                    struct ChooserAutoState {
+                        bool success = false;
+                        QString error;
+                        bool done = false;
+                    };
+                    auto chooserState = std::make_shared<ChooserAutoState>();
+
+                    // Schedule the wizard interaction to fire inside exec()'s nested event loop.
+                    QTimer::singleShot(300, win, [chooserState, win, meshPathAbs, suggestedName]() {
+                        qInfo().noquote() << "[InstaMAT2Remix]"
+                            << "Deferred wizard interaction fired after Asset Texturing click.";
+
+                        // Wait for the wizard widgets to become discoverable.
+                        QWidget* wiz = nullptr;
+                        const qint64 deadline = QDateTime::currentMSecsSinceEpoch() + 10000;
+                        while (QDateTime::currentMSecsSinceEpoch() < deadline) {
+                            wiz = FindProjectWizardRoot(FindHostMainWindow());
+                            if (wiz) break;
+
+                            // Also check modal dialogs (the wizard may not be a child of main window).
+                            QWidget* modal = QApplication::activeModalWidget();
+                            if (modal && HasProjectWizardSignature(modal)) {
+                                wiz = modal;
+                                break;
+                            }
+
+                            QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+                        }
+
+                        if (wiz) {
+                            chooserState->success = FillProjectWizardAndCreate(
+                                FindHostMainWindow(), wiz, nullptr,
+                                meshPathAbs, suggestedName, &chooserState->error);
+                        } else {
+                            qInfo().noquote() << "[InstaMAT2Remix]"
+                                << "Wizard widget not found after Asset Texturing click; trying accessibility.";
+                            QString accErr;
+                            chooserState->success = TryCreateTexturingProjectFromMeshAccessibleAnyRoot(
+                                FindHostMainWindow(), meshPathAbs, suggestedName, &accErr);
+                            if (!chooserState->success)
+                                chooserState->error = "Wizard not found after Asset Texturing click. " + accErr;
+                        }
+
+                        // If automation failed, close any modal dialog to unblock exec().
+                        if (!chooserState->success) {
+                            QWidget* modal = QApplication::activeModalWidget();
+                            if (modal) {
+                                modal->close();
+                                QCoreApplication::processEvents();
+                            }
+                        }
+                        chooserState->done = true;
+                    });
+
+                    // Click "Asset Texturing". If this triggers QDialog::exec(), we
+                    // block here until the timer automates the dialog and closes it.
+                    QString activateErr;
+                    ActivateProjectTypeAssetTexturing(chooserRoot, &activateErr);
+
+                    // exec() has returned (if it was blocking), or the click was non-blocking.
+                    // Wait for the timer to complete in case the click was non-blocking.
+                    const qint64 waitEnd = QDateTime::currentMSecsSinceEpoch() + 20000;
+                    while (!chooserState->done && QDateTime::currentMSecsSinceEpoch() < waitEnd) {
                         QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
                     }
+
+                    if (chooserState->done) {
+                        if (outError) *outError = chooserState->error;
+                        return chooserState->success;
+                    }
+                    qInfo().noquote() << "[InstaMAT2Remix]"
+                        << "Timer did not complete — falling through to additional fallbacks.";
+
+                } else {
+                    // QML-based chooser detected (no QWidget buttons/views found).
+                    // Do NOT schedule any timer — fall through cleanly to the
+                    // accessibility / QML automation fallback below, which can
+                    // interact with the QML-based UI.
+                    qInfo().noquote() << "[InstaMAT2Remix]"
+                        << "Chooser is QML-based (no QWidget controls). Falling through to accessibility/QML.";
                 }
             }
 
@@ -1614,10 +1707,51 @@ namespace InstaMAT2Remix {
                 }
                 qInfo().noquote() << "[InstaMAT2Remix] QML automation failed:" << qmlErr << "- attempting accessibility automation.";
 
+                // IMPORTANT: When we have a chooserRoot (i.e. we're inside a modal dialog),
+                // run accessibility on the DIALOG first, NOT on the main window.
+                // Running on the main window would find "Asset Texturing" in the menu bar
+                // and trigger File > New AGAIN, opening a duplicate dialog.
                 QString accErr;
-                if (TryCreateTexturingProjectFromMeshAccessibleAnyRoot(win, meshPathAbs, suggestedName, &accErr)) {
-                    return true;
+                bool accOk = false;
+
+                // 1) Try the dialog/chooser we already know about.
+                if (chooserRoot) {
+                    qInfo().noquote() << "[InstaMAT2Remix] Running accessibility on chooserRoot (dialog).";
+                    accOk = TryCreateTexturingProjectFromMeshAccessible(chooserRoot, meshPathAbs, suggestedName, &accErr);
                 }
+
+                // 2) Try the active modal widget (may be different from chooserRoot after navigation).
+                if (!accOk) {
+                    QWidget* modal = QApplication::activeModalWidget();
+                    if (modal && modal != chooserRoot) {
+                        qInfo().noquote() << "[InstaMAT2Remix] Running accessibility on active modal widget.";
+                        accOk = TryCreateTexturingProjectFromMeshAccessible(modal, meshPathAbs, suggestedName, &accErr);
+                    }
+                }
+
+                // 3) Try all visible top-level windows (except the main window, to avoid menu re-trigger).
+                if (!accOk) {
+                    const auto topWindows = QGuiApplication::topLevelWindows();
+                    for (QWindow* window : topWindows) {
+                        if (!window || !window->isVisible()) continue;
+                        QAccessibleInterface* rootAcc = QAccessible::queryAccessibleInterface(window);
+                        if (!AccessibleLooksLikeNewProject(rootAcc)) continue;
+                        if (TryCreateTexturingProjectFromMeshAccessible(window, meshPathAbs, suggestedName, &accErr)) {
+                            accOk = true;
+                            break;
+                        }
+                    }
+                }
+
+                // 4) Last resort: try the main window (risk of re-triggering File > New, but
+                //    only if nothing else worked).
+                if (!accOk && !chooserRoot) {
+                    qInfo().noquote() << "[InstaMAT2Remix] Last resort: accessibility on main window.";
+                    accOk = TryCreateTexturingProjectFromMeshAccessibleAnyRoot(win, meshPathAbs, suggestedName, &accErr);
+                }
+
+                if (accOk) return true;
+
                 if (outError) *outError = "QML Error: " + qmlErr + "\nAccessibility Error: " + accErr;
                 qWarning().noquote() << "[InstaMAT2Remix]" << "Auto-create: accessibility automation failed.";
                 return false;
@@ -1957,6 +2091,18 @@ namespace InstaMAT2Remix {
                 }
 
                 state->success = FillProjectWizardAndCreate(win, wiz, chooser, meshPathAbs, suggestedName, &state->error);
+
+                // CRITICAL: If automation failed, close the dialog so exec() unblocks
+                // and the user isn't stuck with a frozen New Project dialog.
+                if (!state->success) {
+                    qInfo().noquote() << "[InstaMAT2Remix]"
+                        << "Auto-create failed inside dialog event loop. Closing dialog to unblock.";
+                    QWidget* modal = QApplication::activeModalWidget();
+                    if (modal) {
+                        modal->close();
+                        QCoreApplication::processEvents();
+                    }
+                }
             });
 
             // Trigger the action — this calls QDialog::exec() internally, blocking here
@@ -2599,10 +2745,6 @@ namespace InstaMAT2Remix {
             return;
         }
 
-        // Prefer naming the project after the *selected* Remix mesh, even if we later substitute a tiling plane
-        // or generate an auto-unwrapped mesh file.
-        QString pulledMeshBaseName = QFileInfo(meshAbs).completeBaseName().trimmed();
-
         if (useTilingMesh) {
             if (!tilingMeshPath.isEmpty() && QFileInfo::exists(tilingMeshPath)) {
                 meshAbs = QDir::cleanPath(tilingMeshPath);
@@ -2649,112 +2791,50 @@ namespace InstaMAT2Remix {
 
         if (QGuiApplication::clipboard()) QGuiApplication::clipboard()->setText(finalMesh);
 
-        // Template Method: Copy template project and open it.
-        const QString templatePath = settings.value(kKeyTemplateGraphPath, "").toString();
-        QString projectsDir = settings.value(kKeyProjectsFolder, "").toString();
-        if (projectsDir.isEmpty()) {
-             const QString docs = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
-             projectsDir = QDir(docs).filePath("InstaMAT/Projects");
-        }
+        // ---------------------------------------------------------------------------
+        // Automatically create an Asset Texturing project using the pulled mesh.
+        //
+        // The project name is always "Remix" so that repeated pulls overwrite the
+        // same project slot instead of cluttering the user's project folder.
+        //
+        // We use TryCreateTexturingProjectFromMesh(), which handles the InstaMAT
+        // New Project dialog via QTimer::singleShot inside QDialog::exec()'s
+        // nested event loop (as recommended by the InstaMAT dev team).
+        //
+        // The automation sets:
+        //   Name:     Remix
+        //   Category: Materials/Assets
+        //   Type:     Multi-Material
+        //   Mesh:     <pulled asset from Remix>
+        // ---------------------------------------------------------------------------
+        {
+            const QString suggestedName = "Remix";
+            QString autoCreateErr;
+            const bool created = TryCreateTexturingProjectFromMesh(finalMesh, suggestedName, &autoCreateErr);
 
-        
-        bool templateFound = !templatePath.isEmpty() && QFileInfo::exists(templatePath);
-        
-        if (!templateFound) {
-            // No template configured. Offer to create a new project and guide the user.
-            QMessageBox::StandardButton reply = QMessageBox::question(
-                nullptr, 
-                "InstaMAT2Remix", 
-                "No template project is configured.\n\n"
-                "Do you want to create a new blank project now?\n"
-                "(You will need to add the RTX Remix Import/Export nodes manually)",
-                QMessageBox::Yes | QMessageBox::No);
-                
-            if (reply == QMessageBox::No) return;
-        }
-
-        const QString projectName = "Remix_" + pulledMeshBaseName;
-        const QString projectDir = QDir(projectsDir).filePath(projectName);
-        const QString projectFile = QDir(projectDir).filePath(projectName + ".imp");
-        
-        if (!QDir().mkpath(projectDir)) {
-             QMessageBox::warning(nullptr, "InstaMAT2Remix", "Failed to create project directory:\n" + projectDir);
-             return;
-        }
-
-        // 1. Copy Template (only if new)
-        bool isNewProject = false;
-        if (!QFileInfo::exists(projectFile)) {
-            if (templateFound) {
-                if (!QFile::copy(templatePath, projectFile)) {
-                    QMessageBox::warning(nullptr, "InstaMAT2Remix", "Failed to copy template project to:\n" + projectFile);
-                    return;
-                }
-                // Make file writable if template was read-only
-                QFile::setPermissions(projectFile, QFile::ReadOwner | QFile::WriteOwner | QFile::ReadUser | QFile::WriteUser);
-            } else {
-                // Trigger auto-creation of NEW project via automation (handled by Python script usually, but here we just prepare the folder)
-                // Actually, if we don't have a template file to copy, we rely on the automation to click "New Project" in the UI.
-                // But we are in C++. We can't easily click UI.
-                // The Python script 'rtx_remix_connector.py' handles the "New Project" click if it detects we are in a "AutoCreate" state.
-                m_isAutoCreatingProject = true;
+            if (!created) {
+                m_logger.Warning(QString("Auto-create project failed: %1").arg(autoCreateErr));
+                QMessageBox::warning(nullptr,
+                                     kPluginName,
+                                     QString("Failed to automatically create project.\n\n%1\n\n"
+                                             "The mesh path has been copied to your clipboard.\n"
+                                             "You can manually create a new Asset Texturing project and paste the mesh path.")
+                                         .arg(autoCreateErr));
+                return;
             }
-            isNewProject = true;
-        }
 
+            m_logger.Info("Auto-create project succeeded.");
 
-        // 2. Copy Mesh
-        const QString meshExt = QFileInfo(finalMesh).suffix();
-        const QString destMeshName = "input_mesh." + meshExt;
-        const QString destMeshPath = QDir(projectDir).filePath(destMeshName);
-        
-        QFile::remove(destMeshPath); // Overwrite
-        if (!QFile::copy(finalMesh, destMeshPath)) {
-             QMessageBox::warning(nullptr, "InstaMAT2Remix", "Failed to copy mesh to project folder:\n" + destMeshPath);
-             return;
+            QMessageBox::information(nullptr,
+                                     kPluginName,
+                                     QString("✓ Project created and linked to RTX Remix.\n\n"
+                                             "Mesh: %1\n"
+                                             "Material: %2\n\n"
+                                             "Use 'Import Textures from Remix' to pull existing textures,\n"
+                                             "or start painting and 'Push to Remix' when ready.")
+                                         .arg(QFileInfo(finalMesh).fileName())
+                                         .arg(materialPrim));
         }
-        
-        // 3. Open Project
-        if (templateFound || !isNewProject) {
-            const QUrl url = QUrl::fromLocalFile(projectFile);
-            if (!QDesktopServices::openUrl(url)) {
-                 QMessageBox::warning(nullptr, "InstaMAT2Remix", "Failed to open project:\n" + projectFile);
-            }
-        } else {
-            // No template, and it is a new project.
-            // We need to trigger the "New Project" action in the host.
-            // We can try to invoke the Python script logic or just tell the user.
-            // Since we are in C++, we can't easily invoke the Python "auto create" logic unless we signal it.
-            // However, the Python script watches for "Pull" actions? No, it's menu driven.
-            
-            // Let's just show a message telling them what to do.
-            QMessageBox::information(nullptr, "InstaMAT2Remix", 
-                "Ready to create project.\n\n"
-                "1. Go to File > New Project\n"
-                "2. Choose 'Element Graph'\n"
-                "3. Save it as '" + projectName + "' in:\n" + projectsDir + "\n\n"
-                "Then add the RTX Remix nodes to start working.");
-                
-            // Open the folder so they can save it there easily
-            QDesktopServices::openUrl(QUrl::fromLocalFile(projectsDir));
-            return; 
-        }
-
-        QString info = isNewProject ? "✓ New project created!\n\n" : "✓ Project updated!\n\n";
-        info += "Project: " + projectName + "\n";
-        info += "Location: " + projectDir + "\n";
-        info += "Mesh: " + destMeshName + "\n\n";
-        
-        if (isNewProject) {
-            info += "💡 The mesh has been copied to the project folder.\n";
-            info += "If your template references './" + destMeshName + "', it will load automatically.\n";
-            info += "Otherwise, please link the mesh manually in the Graph Object Editor.";
-        } else {
-            info += "💡 The mesh file in the project folder has been updated.\n";
-            info += "InstaMAT should reload it automatically.";
-        }
-
-        QMessageBox::information(nullptr, "InstaMAT2Remix", info);
 
         if (autoImportAfterPull) {
              ImportTexturesFromRemix();

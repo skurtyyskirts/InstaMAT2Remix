@@ -156,7 +156,7 @@ events:
       The output was:
       0
       MSBuild version 17.14.23+b0019275e for .NET Framework
-      Build started 2/7/2026 10:52:27 PM.
+      Build started 2/7/2026 11:53:33 PM.
       
       Project "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\4.1.0\\CompilerIdCXX\\CompilerIdCXX.vcxproj" on node 1 (default targets).
       PrepareForBuild:
@@ -185,7 +185,7 @@ events:
           0 Warning(s)
           0 Error(s)
       
-      Time Elapsed 00:00:00.51
+      Time Elapsed 00:00:00.36
       
       
       Compilation of the CXX compiler identification source "CMakeCXXCompilerId.cpp" produced "CompilerIdCXX.exe"
@@ -1650,8 +1650,8 @@ events:
     checks:
       - "Detecting CXX compiler ABI info"
     directories:
-      source: "C:/Users/skurtyy/Desktop/instamatgem3/InstaMAT2Remix/build/CMakeFiles/CMakeScratch/TryCompile-x0no16"
-      binary: "C:/Users/skurtyy/Desktop/instamatgem3/InstaMAT2Remix/build/CMakeFiles/CMakeScratch/TryCompile-x0no16"
+      source: "C:/Users/skurtyy/Desktop/instamatgem3/InstaMAT2Remix/build/CMakeFiles/CMakeScratch/TryCompile-4fwyb5"
+      binary: "C:/Users/skurtyy/Desktop/instamatgem3/InstaMAT2Remix/build/CMakeFiles/CMakeScratch/TryCompile-4fwyb5"
     cmakeVariables:
       CMAKE_CXX_FLAGS: "/DWIN32 /D_WINDOWS /GR /EHsc"
       CMAKE_CXX_FLAGS_DEBUG: "/Zi /Ob0 /Od /RTC1"
@@ -1661,40 +1661,40 @@ events:
       variable: "CMAKE_CXX_ABI_COMPILED"
       cached: true
       stdout: |
-        Change Dir: 'C:/Users/skurtyy/Desktop/instamatgem3/InstaMAT2Remix/build/CMakeFiles/CMakeScratch/TryCompile-x0no16'
+        Change Dir: 'C:/Users/skurtyy/Desktop/instamatgem3/InstaMAT2Remix/build/CMakeFiles/CMakeScratch/TryCompile-4fwyb5'
         
-        Run Build Command(s): "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/MSBuild/Current/Bin/amd64/MSBuild.exe" cmTC_2c767.vcxproj /p:Configuration=Debug /p:Platform=x64 /p:VisualStudioVersion=17.0 /v:n
+        Run Build Command(s): "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/MSBuild/Current/Bin/amd64/MSBuild.exe" cmTC_986de.vcxproj /p:Configuration=Debug /p:Platform=x64 /p:VisualStudioVersion=17.0 /v:n
         MSBuild version 17.14.23+b0019275e for .NET Framework
-        Build started 2/7/2026 10:52:28 PM.
+        Build started 2/7/2026 11:53:34 PM.
         
-        Project "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-x0no16\\cmTC_2c767.vcxproj" on node 1 (default targets).
+        Project "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-4fwyb5\\cmTC_986de.vcxproj" on node 1 (default targets).
         PrepareForBuild:
-          Creating directory "cmTC_2c767.dir\\Debug\\".
+          Creating directory "cmTC_986de.dir\\Debug\\".
           Structured output is enabled. The formatting of compiler diagnostics will reflect the error hierarchy. See https://aka.ms/cpp/structured-output for more details.
-          Creating directory "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-x0no16\\Debug\\".
-          Creating directory "cmTC_2c767.dir\\Debug\\cmTC_2c767.tlog\\".
+          Creating directory "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-4fwyb5\\Debug\\".
+          Creating directory "cmTC_986de.dir\\Debug\\cmTC_986de.tlog\\".
         InitializeBuildStatus:
-          Creating "cmTC_2c767.dir\\Debug\\cmTC_2c767.tlog\\unsuccessfulbuild" because "AlwaysCreate" was specified.
-          Touching "cmTC_2c767.dir\\Debug\\cmTC_2c767.tlog\\unsuccessfulbuild".
+          Creating "cmTC_986de.dir\\Debug\\cmTC_986de.tlog\\unsuccessfulbuild" because "AlwaysCreate" was specified.
+          Touching "cmTC_986de.dir\\Debug\\cmTC_986de.tlog\\unsuccessfulbuild".
         ClCompile:
-          C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\CL.exe /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D "CMAKE_INTDIR=\\"Debug\\"" /EHsc /RTC1 /MDd /GS /fp:precise /GR /Fo"cmTC_2c767.dir\\Debug\\\\" /Fd"cmTC_2c767.dir\\Debug\\vc143.pdb" /external:W1 /Gd /TP /errorReport:queue "C:\\Program Files\\CMake\\share\\cmake-4.1\\Modules\\CMakeCXXCompilerABI.cpp"
+          C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\CL.exe /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D "CMAKE_INTDIR=\\"Debug\\"" /EHsc /RTC1 /MDd /GS /fp:precise /GR /Fo"cmTC_986de.dir\\Debug\\\\" /Fd"cmTC_986de.dir\\Debug\\vc143.pdb" /external:W1 /Gd /TP /errorReport:queue "C:\\Program Files\\CMake\\share\\cmake-4.1\\Modules\\CMakeCXXCompilerABI.cpp"
           Microsoft (R) C/C++ Optimizing Compiler Version 19.44.35219 for x64
           Copyright (C) Microsoft Corporation.  All rights reserved.
-          cl /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D "CMAKE_INTDIR=\\"Debug\\"" /EHsc /RTC1 /MDd /GS /fp:precise /GR /Fo"cmTC_2c767.dir\\Debug\\\\" /Fd"cmTC_2c767.dir\\Debug\\vc143.pdb" /external:W1 /Gd /TP /errorReport:queue "C:\\Program Files\\CMake\\share\\cmake-4.1\\Modules\\CMakeCXXCompilerABI.cpp"
+          cl /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D "CMAKE_INTDIR=\\"Debug\\"" /EHsc /RTC1 /MDd /GS /fp:precise /GR /Fo"cmTC_986de.dir\\Debug\\\\" /Fd"cmTC_986de.dir\\Debug\\vc143.pdb" /external:W1 /Gd /TP /errorReport:queue "C:\\Program Files\\CMake\\share\\cmake-4.1\\Modules\\CMakeCXXCompilerABI.cpp"
           CMakeCXXCompilerABI.cpp
         Link:
-          C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\link.exe /OUT:"C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-x0no16\\Debug\\cmTC_2c767.exe" /INCREMENTAL /ILK:"cmTC_2c767.dir\\Debug\\cmTC_2c767.ilk" /NOLOGO kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /DEBUG /PDB:"C:/Users/skurtyy/Desktop/instamatgem3/InstaMAT2Remix/build/CMakeFiles/CMakeScratch/TryCompile-x0no16/Debug/cmTC_2c767.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /IMPLIB:"C:/Users/skurtyy/Desktop/instamatgem3/InstaMAT2Remix/build/CMakeFiles/CMakeScratch/TryCompile-x0no16/Debug/cmTC_2c767.lib" /MACHINE:X64  /machine:x64 cmTC_2c767.dir\\Debug\\CMakeCXXCompilerABI.obj
-          cmTC_2c767.vcxproj -> C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-x0no16\\Debug\\cmTC_2c767.exe
+          C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\link.exe /OUT:"C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-4fwyb5\\Debug\\cmTC_986de.exe" /INCREMENTAL /ILK:"cmTC_986de.dir\\Debug\\cmTC_986de.ilk" /NOLOGO kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /DEBUG /PDB:"C:/Users/skurtyy/Desktop/instamatgem3/InstaMAT2Remix/build/CMakeFiles/CMakeScratch/TryCompile-4fwyb5/Debug/cmTC_986de.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /IMPLIB:"C:/Users/skurtyy/Desktop/instamatgem3/InstaMAT2Remix/build/CMakeFiles/CMakeScratch/TryCompile-4fwyb5/Debug/cmTC_986de.lib" /MACHINE:X64  /machine:x64 cmTC_986de.dir\\Debug\\CMakeCXXCompilerABI.obj
+          cmTC_986de.vcxproj -> C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-4fwyb5\\Debug\\cmTC_986de.exe
         FinalizeBuildStatus:
-          Deleting file "cmTC_2c767.dir\\Debug\\cmTC_2c767.tlog\\unsuccessfulbuild".
-          Touching "cmTC_2c767.dir\\Debug\\cmTC_2c767.tlog\\cmTC_2c767.lastbuildstate".
-        Done Building Project "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-x0no16\\cmTC_2c767.vcxproj" (default targets).
+          Deleting file "cmTC_986de.dir\\Debug\\cmTC_986de.tlog\\unsuccessfulbuild".
+          Touching "cmTC_986de.dir\\Debug\\cmTC_986de.tlog\\cmTC_986de.lastbuildstate".
+        Done Building Project "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-4fwyb5\\cmTC_986de.vcxproj" (default targets).
         
         Build succeeded.
             0 Warning(s)
             0 Error(s)
         
-        Time Elapsed 00:00:00.38
+        Time Elapsed 00:00:00.41
         
       exitCode: 0
   -
@@ -1740,8 +1740,8 @@ events:
     checks:
       - "Performing Test CMAKE_HAVE_LIBC_PTHREAD"
     directories:
-      source: "C:/Users/skurtyy/Desktop/instamatgem3/InstaMAT2Remix/build/CMakeFiles/CMakeScratch/TryCompile-krotco"
-      binary: "C:/Users/skurtyy/Desktop/instamatgem3/InstaMAT2Remix/build/CMakeFiles/CMakeScratch/TryCompile-krotco"
+      source: "C:/Users/skurtyy/Desktop/instamatgem3/InstaMAT2Remix/build/CMakeFiles/CMakeScratch/TryCompile-kghpis"
+      binary: "C:/Users/skurtyy/Desktop/instamatgem3/InstaMAT2Remix/build/CMakeFiles/CMakeScratch/TryCompile-kghpis"
     cmakeVariables:
       CMAKE_CXX_FLAGS: "/DWIN32 /D_WINDOWS /GR /EHsc"
       CMAKE_CXX_FLAGS_DEBUG: "/Zi /Ob0 /Od /RTC1"
@@ -1751,40 +1751,40 @@ events:
       variable: "CMAKE_HAVE_LIBC_PTHREAD"
       cached: true
       stdout: |
-        Change Dir: 'C:/Users/skurtyy/Desktop/instamatgem3/InstaMAT2Remix/build/CMakeFiles/CMakeScratch/TryCompile-krotco'
+        Change Dir: 'C:/Users/skurtyy/Desktop/instamatgem3/InstaMAT2Remix/build/CMakeFiles/CMakeScratch/TryCompile-kghpis'
         
-        Run Build Command(s): "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/MSBuild/Current/Bin/amd64/MSBuild.exe" cmTC_a5430.vcxproj /p:Configuration=Debug /p:Platform=x64 /p:VisualStudioVersion=17.0 /v:n
+        Run Build Command(s): "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/MSBuild/Current/Bin/amd64/MSBuild.exe" cmTC_c84cc.vcxproj /p:Configuration=Debug /p:Platform=x64 /p:VisualStudioVersion=17.0 /v:n
         MSBuild version 17.14.23+b0019275e for .NET Framework
-        Build started 2/7/2026 10:52:29 PM.
+        Build started 2/7/2026 11:53:35 PM.
         
-        Project "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-krotco\\cmTC_a5430.vcxproj" on node 1 (default targets).
+        Project "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-kghpis\\cmTC_c84cc.vcxproj" on node 1 (default targets).
         PrepareForBuild:
-          Creating directory "cmTC_a5430.dir\\Debug\\".
+          Creating directory "cmTC_c84cc.dir\\Debug\\".
           Structured output is enabled. The formatting of compiler diagnostics will reflect the error hierarchy. See https://aka.ms/cpp/structured-output for more details.
-          Creating directory "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-krotco\\Debug\\".
-          Creating directory "cmTC_a5430.dir\\Debug\\cmTC_a5430.tlog\\".
+          Creating directory "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-kghpis\\Debug\\".
+          Creating directory "cmTC_c84cc.dir\\Debug\\cmTC_c84cc.tlog\\".
         InitializeBuildStatus:
-          Creating "cmTC_a5430.dir\\Debug\\cmTC_a5430.tlog\\unsuccessfulbuild" because "AlwaysCreate" was specified.
-          Touching "cmTC_a5430.dir\\Debug\\cmTC_a5430.tlog\\unsuccessfulbuild".
+          Creating "cmTC_c84cc.dir\\Debug\\cmTC_c84cc.tlog\\unsuccessfulbuild" because "AlwaysCreate" was specified.
+          Touching "cmTC_c84cc.dir\\Debug\\cmTC_c84cc.tlog\\unsuccessfulbuild".
         ClCompile:
-          C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\CL.exe /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D CMAKE_HAVE_LIBC_PTHREAD /D "CMAKE_INTDIR=\\"Debug\\"" /EHsc /RTC1 /MDd /GS /fp:precise /GR /std:c++17 /Fo"cmTC_a5430.dir\\Debug\\\\" /Fd"cmTC_a5430.dir\\Debug\\vc143.pdb" /external:W1 /Gd /TP /errorReport:queue "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-krotco\\src.cxx"
+          C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\CL.exe /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D CMAKE_HAVE_LIBC_PTHREAD /D "CMAKE_INTDIR=\\"Debug\\"" /EHsc /RTC1 /MDd /GS /fp:precise /GR /std:c++17 /Fo"cmTC_c84cc.dir\\Debug\\\\" /Fd"cmTC_c84cc.dir\\Debug\\vc143.pdb" /external:W1 /Gd /TP /errorReport:queue "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-kghpis\\src.cxx"
           Microsoft (R) C/C++ Optimizing Compiler Version 19.44.35219 for x64
           Copyright (C) Microsoft Corporation.  All rights reserved.
-          cl /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D CMAKE_HAVE_LIBC_PTHREAD /D "CMAKE_INTDIR=\\"Debug\\"" /EHsc /RTC1 /MDd /GS /fp:precise /GR /std:c++17 /Fo"cmTC_a5430.dir\\Debug\\\\" /Fd"cmTC_a5430.dir\\Debug\\vc143.pdb" /external:W1 /Gd /TP /errorReport:queue "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-krotco\\src.cxx"
+          cl /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D CMAKE_HAVE_LIBC_PTHREAD /D "CMAKE_INTDIR=\\"Debug\\"" /EHsc /RTC1 /MDd /GS /fp:precise /GR /std:c++17 /Fo"cmTC_c84cc.dir\\Debug\\\\" /Fd"cmTC_c84cc.dir\\Debug\\vc143.pdb" /external:W1 /Gd /TP /errorReport:queue "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-kghpis\\src.cxx"
           src.cxx
-        C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-krotco\\src.cxx(1,10): error C1083: Cannot open include file: 'pthread.h': No such file or directory [C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-krotco\\cmTC_a5430.vcxproj]
-        Done Building Project "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-krotco\\cmTC_a5430.vcxproj" (default targets) -- FAILED.
+        C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-kghpis\\src.cxx(1,10): error C1083: Cannot open include file: 'pthread.h': No such file or directory [C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-kghpis\\cmTC_c84cc.vcxproj]
+        Done Building Project "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-kghpis\\cmTC_c84cc.vcxproj" (default targets) -- FAILED.
         
         Build FAILED.
         
-        "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-krotco\\cmTC_a5430.vcxproj" (default target) (1) ->
+        "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-kghpis\\cmTC_c84cc.vcxproj" (default target) (1) ->
         (ClCompile target) -> 
-          C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-krotco\\src.cxx(1,10): error C1083: Cannot open include file: 'pthread.h': No such file or directory [C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-krotco\\cmTC_a5430.vcxproj]
+          C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-kghpis\\src.cxx(1,10): error C1083: Cannot open include file: 'pthread.h': No such file or directory [C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-kghpis\\cmTC_c84cc.vcxproj]
         
             0 Warning(s)
             1 Error(s)
         
-        Time Elapsed 00:00:00.21
+        Time Elapsed 00:00:00.23
         
       exitCode: 1
   -
@@ -1801,8 +1801,8 @@ events:
     checks:
       - "Looking for pthread_create in pthreads"
     directories:
-      source: "C:/Users/skurtyy/Desktop/instamatgem3/InstaMAT2Remix/build/CMakeFiles/CMakeScratch/TryCompile-gticsy"
-      binary: "C:/Users/skurtyy/Desktop/instamatgem3/InstaMAT2Remix/build/CMakeFiles/CMakeScratch/TryCompile-gticsy"
+      source: "C:/Users/skurtyy/Desktop/instamatgem3/InstaMAT2Remix/build/CMakeFiles/CMakeScratch/TryCompile-xi3opf"
+      binary: "C:/Users/skurtyy/Desktop/instamatgem3/InstaMAT2Remix/build/CMakeFiles/CMakeScratch/TryCompile-xi3opf"
     cmakeVariables:
       CMAKE_CXX_FLAGS: "/DWIN32 /D_WINDOWS /GR /EHsc"
       CMAKE_CXX_FLAGS_DEBUG: "/Zi /Ob0 /Od /RTC1"
@@ -1812,37 +1812,37 @@ events:
       variable: "CMAKE_HAVE_PTHREADS_CREATE"
       cached: true
       stdout: |
-        Change Dir: 'C:/Users/skurtyy/Desktop/instamatgem3/InstaMAT2Remix/build/CMakeFiles/CMakeScratch/TryCompile-gticsy'
+        Change Dir: 'C:/Users/skurtyy/Desktop/instamatgem3/InstaMAT2Remix/build/CMakeFiles/CMakeScratch/TryCompile-xi3opf'
         
-        Run Build Command(s): "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/MSBuild/Current/Bin/amd64/MSBuild.exe" cmTC_60b33.vcxproj /p:Configuration=Debug /p:Platform=x64 /p:VisualStudioVersion=17.0 /v:n
+        Run Build Command(s): "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/MSBuild/Current/Bin/amd64/MSBuild.exe" cmTC_f6e4c.vcxproj /p:Configuration=Debug /p:Platform=x64 /p:VisualStudioVersion=17.0 /v:n
         MSBuild version 17.14.23+b0019275e for .NET Framework
-        Build started 2/7/2026 10:52:29 PM.
+        Build started 2/7/2026 11:53:35 PM.
         
-        Project "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-gticsy\\cmTC_60b33.vcxproj" on node 1 (default targets).
+        Project "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-xi3opf\\cmTC_f6e4c.vcxproj" on node 1 (default targets).
         PrepareForBuild:
-          Creating directory "cmTC_60b33.dir\\Debug\\".
+          Creating directory "cmTC_f6e4c.dir\\Debug\\".
           Structured output is enabled. The formatting of compiler diagnostics will reflect the error hierarchy. See https://aka.ms/cpp/structured-output for more details.
-          Creating directory "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-gticsy\\Debug\\".
-          Creating directory "cmTC_60b33.dir\\Debug\\cmTC_60b33.tlog\\".
+          Creating directory "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-xi3opf\\Debug\\".
+          Creating directory "cmTC_f6e4c.dir\\Debug\\cmTC_f6e4c.tlog\\".
         InitializeBuildStatus:
-          Creating "cmTC_60b33.dir\\Debug\\cmTC_60b33.tlog\\unsuccessfulbuild" because "AlwaysCreate" was specified.
-          Touching "cmTC_60b33.dir\\Debug\\cmTC_60b33.tlog\\unsuccessfulbuild".
+          Creating "cmTC_f6e4c.dir\\Debug\\cmTC_f6e4c.tlog\\unsuccessfulbuild" because "AlwaysCreate" was specified.
+          Touching "cmTC_f6e4c.dir\\Debug\\cmTC_f6e4c.tlog\\unsuccessfulbuild".
         ClCompile:
-          C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\CL.exe /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D CHECK_FUNCTION_EXISTS=pthread_create /D "CMAKE_INTDIR=\\"Debug\\"" /EHsc /RTC1 /MDd /GS /fp:precise /GR /std:c++17 /Fo"cmTC_60b33.dir\\Debug\\\\" /Fd"cmTC_60b33.dir\\Debug\\vc143.pdb" /external:W1 /Gd /TP /errorReport:queue "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-gticsy\\CheckFunctionExists.cxx"
+          C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\CL.exe /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D CHECK_FUNCTION_EXISTS=pthread_create /D "CMAKE_INTDIR=\\"Debug\\"" /EHsc /RTC1 /MDd /GS /fp:precise /GR /std:c++17 /Fo"cmTC_f6e4c.dir\\Debug\\\\" /Fd"cmTC_f6e4c.dir\\Debug\\vc143.pdb" /external:W1 /Gd /TP /errorReport:queue "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-xi3opf\\CheckFunctionExists.cxx"
           Microsoft (R) C/C++ Optimizing Compiler Version 19.44.35219 for x64
           Copyright (C) Microsoft Corporation.  All rights reserved.
-          cl /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D CHECK_FUNCTION_EXISTS=pthread_create /D "CMAKE_INTDIR=\\"Debug\\"" /EHsc /RTC1 /MDd /GS /fp:precise /GR /std:c++17 /Fo"cmTC_60b33.dir\\Debug\\\\" /Fd"cmTC_60b33.dir\\Debug\\vc143.pdb" /external:W1 /Gd /TP /errorReport:queue "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-gticsy\\CheckFunctionExists.cxx"
+          cl /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D CHECK_FUNCTION_EXISTS=pthread_create /D "CMAKE_INTDIR=\\"Debug\\"" /EHsc /RTC1 /MDd /GS /fp:precise /GR /std:c++17 /Fo"cmTC_f6e4c.dir\\Debug\\\\" /Fd"cmTC_f6e4c.dir\\Debug\\vc143.pdb" /external:W1 /Gd /TP /errorReport:queue "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-xi3opf\\CheckFunctionExists.cxx"
           CheckFunctionExists.cxx
         Link:
-          C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\link.exe /OUT:"C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-gticsy\\Debug\\cmTC_60b33.exe" /INCREMENTAL /ILK:"cmTC_60b33.dir\\Debug\\cmTC_60b33.ilk" /NOLOGO pthreads.lib kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /DEBUG /PDB:"C:/Users/skurtyy/Desktop/instamatgem3/InstaMAT2Remix/build/CMakeFiles/CMakeScratch/TryCompile-gticsy/Debug/cmTC_60b33.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /IMPLIB:"C:/Users/skurtyy/Desktop/instamatgem3/InstaMAT2Remix/build/CMakeFiles/CMakeScratch/TryCompile-gticsy/Debug/cmTC_60b33.lib" /MACHINE:X64  /machine:x64 cmTC_60b33.dir\\Debug\\CheckFunctionExists.obj
-        LINK : fatal error LNK1104: cannot open file 'pthreads.lib' [C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-gticsy\\cmTC_60b33.vcxproj]
-        Done Building Project "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-gticsy\\cmTC_60b33.vcxproj" (default targets) -- FAILED.
+          C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\link.exe /OUT:"C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-xi3opf\\Debug\\cmTC_f6e4c.exe" /INCREMENTAL /ILK:"cmTC_f6e4c.dir\\Debug\\cmTC_f6e4c.ilk" /NOLOGO pthreads.lib kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /DEBUG /PDB:"C:/Users/skurtyy/Desktop/instamatgem3/InstaMAT2Remix/build/CMakeFiles/CMakeScratch/TryCompile-xi3opf/Debug/cmTC_f6e4c.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /IMPLIB:"C:/Users/skurtyy/Desktop/instamatgem3/InstaMAT2Remix/build/CMakeFiles/CMakeScratch/TryCompile-xi3opf/Debug/cmTC_f6e4c.lib" /MACHINE:X64  /machine:x64 cmTC_f6e4c.dir\\Debug\\CheckFunctionExists.obj
+        LINK : fatal error LNK1104: cannot open file 'pthreads.lib' [C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-xi3opf\\cmTC_f6e4c.vcxproj]
+        Done Building Project "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-xi3opf\\cmTC_f6e4c.vcxproj" (default targets) -- FAILED.
         
         Build FAILED.
         
-        "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-gticsy\\cmTC_60b33.vcxproj" (default target) (1) ->
+        "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-xi3opf\\cmTC_f6e4c.vcxproj" (default target) (1) ->
         (Link target) -> 
-          LINK : fatal error LNK1104: cannot open file 'pthreads.lib' [C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-gticsy\\cmTC_60b33.vcxproj]
+          LINK : fatal error LNK1104: cannot open file 'pthreads.lib' [C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-xi3opf\\cmTC_f6e4c.vcxproj]
         
             0 Warning(s)
             1 Error(s)
@@ -1864,8 +1864,8 @@ events:
     checks:
       - "Looking for pthread_create in pthread"
     directories:
-      source: "C:/Users/skurtyy/Desktop/instamatgem3/InstaMAT2Remix/build/CMakeFiles/CMakeScratch/TryCompile-5wtvr5"
-      binary: "C:/Users/skurtyy/Desktop/instamatgem3/InstaMAT2Remix/build/CMakeFiles/CMakeScratch/TryCompile-5wtvr5"
+      source: "C:/Users/skurtyy/Desktop/instamatgem3/InstaMAT2Remix/build/CMakeFiles/CMakeScratch/TryCompile-c761eg"
+      binary: "C:/Users/skurtyy/Desktop/instamatgem3/InstaMAT2Remix/build/CMakeFiles/CMakeScratch/TryCompile-c761eg"
     cmakeVariables:
       CMAKE_CXX_FLAGS: "/DWIN32 /D_WINDOWS /GR /EHsc"
       CMAKE_CXX_FLAGS_DEBUG: "/Zi /Ob0 /Od /RTC1"
@@ -1875,37 +1875,37 @@ events:
       variable: "CMAKE_HAVE_PTHREAD_CREATE"
       cached: true
       stdout: |
-        Change Dir: 'C:/Users/skurtyy/Desktop/instamatgem3/InstaMAT2Remix/build/CMakeFiles/CMakeScratch/TryCompile-5wtvr5'
+        Change Dir: 'C:/Users/skurtyy/Desktop/instamatgem3/InstaMAT2Remix/build/CMakeFiles/CMakeScratch/TryCompile-c761eg'
         
-        Run Build Command(s): "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/MSBuild/Current/Bin/amd64/MSBuild.exe" cmTC_bbfe2.vcxproj /p:Configuration=Debug /p:Platform=x64 /p:VisualStudioVersion=17.0 /v:n
+        Run Build Command(s): "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/MSBuild/Current/Bin/amd64/MSBuild.exe" cmTC_a5ea4.vcxproj /p:Configuration=Debug /p:Platform=x64 /p:VisualStudioVersion=17.0 /v:n
         MSBuild version 17.14.23+b0019275e for .NET Framework
-        Build started 2/7/2026 10:52:29 PM.
+        Build started 2/7/2026 11:53:35 PM.
         
-        Project "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-5wtvr5\\cmTC_bbfe2.vcxproj" on node 1 (default targets).
+        Project "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-c761eg\\cmTC_a5ea4.vcxproj" on node 1 (default targets).
         PrepareForBuild:
-          Creating directory "cmTC_bbfe2.dir\\Debug\\".
+          Creating directory "cmTC_a5ea4.dir\\Debug\\".
           Structured output is enabled. The formatting of compiler diagnostics will reflect the error hierarchy. See https://aka.ms/cpp/structured-output for more details.
-          Creating directory "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-5wtvr5\\Debug\\".
-          Creating directory "cmTC_bbfe2.dir\\Debug\\cmTC_bbfe2.tlog\\".
+          Creating directory "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-c761eg\\Debug\\".
+          Creating directory "cmTC_a5ea4.dir\\Debug\\cmTC_a5ea4.tlog\\".
         InitializeBuildStatus:
-          Creating "cmTC_bbfe2.dir\\Debug\\cmTC_bbfe2.tlog\\unsuccessfulbuild" because "AlwaysCreate" was specified.
-          Touching "cmTC_bbfe2.dir\\Debug\\cmTC_bbfe2.tlog\\unsuccessfulbuild".
+          Creating "cmTC_a5ea4.dir\\Debug\\cmTC_a5ea4.tlog\\unsuccessfulbuild" because "AlwaysCreate" was specified.
+          Touching "cmTC_a5ea4.dir\\Debug\\cmTC_a5ea4.tlog\\unsuccessfulbuild".
         ClCompile:
-          C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\CL.exe /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D CHECK_FUNCTION_EXISTS=pthread_create /D "CMAKE_INTDIR=\\"Debug\\"" /EHsc /RTC1 /MDd /GS /fp:precise /GR /std:c++17 /Fo"cmTC_bbfe2.dir\\Debug\\\\" /Fd"cmTC_bbfe2.dir\\Debug\\vc143.pdb" /external:W1 /Gd /TP /errorReport:queue "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-5wtvr5\\CheckFunctionExists.cxx"
+          C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\CL.exe /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D CHECK_FUNCTION_EXISTS=pthread_create /D "CMAKE_INTDIR=\\"Debug\\"" /EHsc /RTC1 /MDd /GS /fp:precise /GR /std:c++17 /Fo"cmTC_a5ea4.dir\\Debug\\\\" /Fd"cmTC_a5ea4.dir\\Debug\\vc143.pdb" /external:W1 /Gd /TP /errorReport:queue "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-c761eg\\CheckFunctionExists.cxx"
           Microsoft (R) C/C++ Optimizing Compiler Version 19.44.35219 for x64
           Copyright (C) Microsoft Corporation.  All rights reserved.
-          cl /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D CHECK_FUNCTION_EXISTS=pthread_create /D "CMAKE_INTDIR=\\"Debug\\"" /EHsc /RTC1 /MDd /GS /fp:precise /GR /std:c++17 /Fo"cmTC_bbfe2.dir\\Debug\\\\" /Fd"cmTC_bbfe2.dir\\Debug\\vc143.pdb" /external:W1 /Gd /TP /errorReport:queue "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-5wtvr5\\CheckFunctionExists.cxx"
+          cl /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D CHECK_FUNCTION_EXISTS=pthread_create /D "CMAKE_INTDIR=\\"Debug\\"" /EHsc /RTC1 /MDd /GS /fp:precise /GR /std:c++17 /Fo"cmTC_a5ea4.dir\\Debug\\\\" /Fd"cmTC_a5ea4.dir\\Debug\\vc143.pdb" /external:W1 /Gd /TP /errorReport:queue "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-c761eg\\CheckFunctionExists.cxx"
           CheckFunctionExists.cxx
         Link:
-          C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\link.exe /OUT:"C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-5wtvr5\\Debug\\cmTC_bbfe2.exe" /INCREMENTAL /ILK:"cmTC_bbfe2.dir\\Debug\\cmTC_bbfe2.ilk" /NOLOGO pthread.lib kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /DEBUG /PDB:"C:/Users/skurtyy/Desktop/instamatgem3/InstaMAT2Remix/build/CMakeFiles/CMakeScratch/TryCompile-5wtvr5/Debug/cmTC_bbfe2.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /IMPLIB:"C:/Users/skurtyy/Desktop/instamatgem3/InstaMAT2Remix/build/CMakeFiles/CMakeScratch/TryCompile-5wtvr5/Debug/cmTC_bbfe2.lib" /MACHINE:X64  /machine:x64 cmTC_bbfe2.dir\\Debug\\CheckFunctionExists.obj
-        LINK : fatal error LNK1104: cannot open file 'pthread.lib' [C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-5wtvr5\\cmTC_bbfe2.vcxproj]
-        Done Building Project "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-5wtvr5\\cmTC_bbfe2.vcxproj" (default targets) -- FAILED.
+          C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\link.exe /OUT:"C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-c761eg\\Debug\\cmTC_a5ea4.exe" /INCREMENTAL /ILK:"cmTC_a5ea4.dir\\Debug\\cmTC_a5ea4.ilk" /NOLOGO pthread.lib kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /DEBUG /PDB:"C:/Users/skurtyy/Desktop/instamatgem3/InstaMAT2Remix/build/CMakeFiles/CMakeScratch/TryCompile-c761eg/Debug/cmTC_a5ea4.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /IMPLIB:"C:/Users/skurtyy/Desktop/instamatgem3/InstaMAT2Remix/build/CMakeFiles/CMakeScratch/TryCompile-c761eg/Debug/cmTC_a5ea4.lib" /MACHINE:X64  /machine:x64 cmTC_a5ea4.dir\\Debug\\CheckFunctionExists.obj
+        LINK : fatal error LNK1104: cannot open file 'pthread.lib' [C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-c761eg\\cmTC_a5ea4.vcxproj]
+        Done Building Project "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-c761eg\\cmTC_a5ea4.vcxproj" (default targets) -- FAILED.
         
         Build FAILED.
         
-        "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-5wtvr5\\cmTC_bbfe2.vcxproj" (default target) (1) ->
+        "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-c761eg\\cmTC_a5ea4.vcxproj" (default target) (1) ->
         (Link target) -> 
-          LINK : fatal error LNK1104: cannot open file 'pthread.lib' [C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-5wtvr5\\cmTC_bbfe2.vcxproj]
+          LINK : fatal error LNK1104: cannot open file 'pthread.lib' [C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-c761eg\\cmTC_a5ea4.vcxproj]
         
             0 Warning(s)
             1 Error(s)
@@ -1928,8 +1928,8 @@ events:
     checks:
       - "Performing Test HAVE_STDATOMIC"
     directories:
-      source: "C:/Users/skurtyy/Desktop/instamatgem3/InstaMAT2Remix/build/CMakeFiles/CMakeScratch/TryCompile-k6yww4"
-      binary: "C:/Users/skurtyy/Desktop/instamatgem3/InstaMAT2Remix/build/CMakeFiles/CMakeScratch/TryCompile-k6yww4"
+      source: "C:/Users/skurtyy/Desktop/instamatgem3/InstaMAT2Remix/build/CMakeFiles/CMakeScratch/TryCompile-byimsx"
+      binary: "C:/Users/skurtyy/Desktop/instamatgem3/InstaMAT2Remix/build/CMakeFiles/CMakeScratch/TryCompile-byimsx"
     cmakeVariables:
       CMAKE_CXX_FLAGS: "/DWIN32 /D_WINDOWS /GR /EHsc"
       CMAKE_CXX_FLAGS_DEBUG: "/Zi /Ob0 /Od /RTC1"
@@ -1939,40 +1939,40 @@ events:
       variable: "HAVE_STDATOMIC"
       cached: true
       stdout: |
-        Change Dir: 'C:/Users/skurtyy/Desktop/instamatgem3/InstaMAT2Remix/build/CMakeFiles/CMakeScratch/TryCompile-k6yww4'
+        Change Dir: 'C:/Users/skurtyy/Desktop/instamatgem3/InstaMAT2Remix/build/CMakeFiles/CMakeScratch/TryCompile-byimsx'
         
-        Run Build Command(s): "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/MSBuild/Current/Bin/amd64/MSBuild.exe" cmTC_39792.vcxproj /p:Configuration=Debug /p:Platform=x64 /p:VisualStudioVersion=17.0 /v:n
+        Run Build Command(s): "C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/MSBuild/Current/Bin/amd64/MSBuild.exe" cmTC_c2f94.vcxproj /p:Configuration=Debug /p:Platform=x64 /p:VisualStudioVersion=17.0 /v:n
         MSBuild version 17.14.23+b0019275e for .NET Framework
-        Build started 2/7/2026 10:52:30 PM.
+        Build started 2/7/2026 11:53:36 PM.
         
-        Project "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-k6yww4\\cmTC_39792.vcxproj" on node 1 (default targets).
+        Project "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-byimsx\\cmTC_c2f94.vcxproj" on node 1 (default targets).
         PrepareForBuild:
-          Creating directory "cmTC_39792.dir\\Debug\\".
+          Creating directory "cmTC_c2f94.dir\\Debug\\".
           Structured output is enabled. The formatting of compiler diagnostics will reflect the error hierarchy. See https://aka.ms/cpp/structured-output for more details.
-          Creating directory "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-k6yww4\\Debug\\".
-          Creating directory "cmTC_39792.dir\\Debug\\cmTC_39792.tlog\\".
+          Creating directory "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-byimsx\\Debug\\".
+          Creating directory "cmTC_c2f94.dir\\Debug\\cmTC_c2f94.tlog\\".
         InitializeBuildStatus:
-          Creating "cmTC_39792.dir\\Debug\\cmTC_39792.tlog\\unsuccessfulbuild" because "AlwaysCreate" was specified.
-          Touching "cmTC_39792.dir\\Debug\\cmTC_39792.tlog\\unsuccessfulbuild".
+          Creating "cmTC_c2f94.dir\\Debug\\cmTC_c2f94.tlog\\unsuccessfulbuild" because "AlwaysCreate" was specified.
+          Touching "cmTC_c2f94.dir\\Debug\\cmTC_c2f94.tlog\\unsuccessfulbuild".
         ClCompile:
-          C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\CL.exe /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D HAVE_STDATOMIC /D "CMAKE_INTDIR=\\"Debug\\"" /EHsc /RTC1 /MDd /GS /fp:precise /GR /std:c++17 /Fo"cmTC_39792.dir\\Debug\\\\" /Fd"cmTC_39792.dir\\Debug\\vc143.pdb" /external:W1 /Gd /TP /errorReport:queue "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-k6yww4\\src.cxx"
+          C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\CL.exe /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D HAVE_STDATOMIC /D "CMAKE_INTDIR=\\"Debug\\"" /EHsc /RTC1 /MDd /GS /fp:precise /GR /std:c++17 /Fo"cmTC_c2f94.dir\\Debug\\\\" /Fd"cmTC_c2f94.dir\\Debug\\vc143.pdb" /external:W1 /Gd /TP /errorReport:queue "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-byimsx\\src.cxx"
           Microsoft (R) C/C++ Optimizing Compiler Version 19.44.35219 for x64
           Copyright (C) Microsoft Corporation.  All rights reserved.
-          cl /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D HAVE_STDATOMIC /D "CMAKE_INTDIR=\\"Debug\\"" /EHsc /RTC1 /MDd /GS /fp:precise /GR /std:c++17 /Fo"cmTC_39792.dir\\Debug\\\\" /Fd"cmTC_39792.dir\\Debug\\vc143.pdb" /external:W1 /Gd /TP /errorReport:queue "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-k6yww4\\src.cxx"
+          cl /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D HAVE_STDATOMIC /D "CMAKE_INTDIR=\\"Debug\\"" /EHsc /RTC1 /MDd /GS /fp:precise /GR /std:c++17 /Fo"cmTC_c2f94.dir\\Debug\\\\" /Fd"cmTC_c2f94.dir\\Debug\\vc143.pdb" /external:W1 /Gd /TP /errorReport:queue "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-byimsx\\src.cxx"
           src.cxx
         Link:
-          C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\link.exe /OUT:"C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-k6yww4\\Debug\\cmTC_39792.exe" /INCREMENTAL /ILK:"cmTC_39792.dir\\Debug\\cmTC_39792.ilk" /NOLOGO kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /DEBUG /PDB:"C:/Users/skurtyy/Desktop/instamatgem3/InstaMAT2Remix/build/CMakeFiles/CMakeScratch/TryCompile-k6yww4/Debug/cmTC_39792.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /IMPLIB:"C:/Users/skurtyy/Desktop/instamatgem3/InstaMAT2Remix/build/CMakeFiles/CMakeScratch/TryCompile-k6yww4/Debug/cmTC_39792.lib" /MACHINE:X64  /machine:x64 cmTC_39792.dir\\Debug\\src.obj
-          cmTC_39792.vcxproj -> C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-k6yww4\\Debug\\cmTC_39792.exe
+          C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\link.exe /OUT:"C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-byimsx\\Debug\\cmTC_c2f94.exe" /INCREMENTAL /ILK:"cmTC_c2f94.dir\\Debug\\cmTC_c2f94.ilk" /NOLOGO kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /DEBUG /PDB:"C:/Users/skurtyy/Desktop/instamatgem3/InstaMAT2Remix/build/CMakeFiles/CMakeScratch/TryCompile-byimsx/Debug/cmTC_c2f94.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /IMPLIB:"C:/Users/skurtyy/Desktop/instamatgem3/InstaMAT2Remix/build/CMakeFiles/CMakeScratch/TryCompile-byimsx/Debug/cmTC_c2f94.lib" /MACHINE:X64  /machine:x64 cmTC_c2f94.dir\\Debug\\src.obj
+          cmTC_c2f94.vcxproj -> C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-byimsx\\Debug\\cmTC_c2f94.exe
         FinalizeBuildStatus:
-          Deleting file "cmTC_39792.dir\\Debug\\cmTC_39792.tlog\\unsuccessfulbuild".
-          Touching "cmTC_39792.dir\\Debug\\cmTC_39792.tlog\\cmTC_39792.lastbuildstate".
-        Done Building Project "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-k6yww4\\cmTC_39792.vcxproj" (default targets).
+          Deleting file "cmTC_c2f94.dir\\Debug\\cmTC_c2f94.tlog\\unsuccessfulbuild".
+          Touching "cmTC_c2f94.dir\\Debug\\cmTC_c2f94.tlog\\cmTC_c2f94.lastbuildstate".
+        Done Building Project "C:\\Users\\skurtyy\\Desktop\\instamatgem3\\InstaMAT2Remix\\build\\CMakeFiles\\CMakeScratch\\TryCompile-byimsx\\cmTC_c2f94.vcxproj" (default targets).
         
         Build succeeded.
             0 Warning(s)
             0 Error(s)
         
-        Time Elapsed 00:00:00.42
+        Time Elapsed 00:00:00.41
         
       exitCode: 0
   -
