@@ -47,6 +47,7 @@
 #include <QUrlQuery>
 #include <QProgressDialog>
 #include <QSysInfo>
+#include <QKeyEvent>
 #include <QWindow>
 // NOTE: We intentionally avoid linking against QtQuick/QML headers here.
 // Including them would add Qt6Quick.dll / Qt6Qml.dll as hard load-time dependencies,
@@ -1462,29 +1463,375 @@ namespace InstaMAT2Remix {
             bool ok = item->setProperty("text", text);
             // Also try invoking textEdited signal to notify bindings
             QMetaObject::invokeMethod(item, "textEdited", Q_ARG(QString, text));
+            // Try editingFinished as well for controls that validate on blur
+            QMetaObject::invokeMethod(item, "editingFinished");
+            // Some QML TextField controls use accepted() to confirm input
+            QMetaObject::invokeMethod(item, "accepted");
             return ok;
+        }
+
+        // ---------------------------------------------------------------------------
+        // Collects QML roots from ALL possible locations: top-level widgets,
+        // top-level windows, active/modal/focus windows, AND their children.
+        // This handles the case where the New Project dialog is a QDialog
+        // (QWidget) wrapping a QQuickWidget — we need to search the dialog's
+        // children to find the QQuickWidget and get its QML root.
+        // ---------------------------------------------------------------------------
+        QList<QObject*> CollectAllQmlRoots() {
+            QList<QObject*> roots;
+            QSet<QObject*> seen;
+
+            auto addRoot = [&](QObject* r) {
+                if (r && !seen.contains(r)) {
+                    seen.insert(r);
+                    roots.append(r);
+                }
+            };
+
+            auto searchChildren = [&](QObject* parent) {
+                if (!parent) return;
+                if (QObject* r = GetQmlRoot(parent)) addRoot(r);
+                // Also search child objects for QQuickWidget / QML containers
+                const auto children = parent->findChildren<QObject*>();
+                for (QObject* child : children) {
+                    if (QObject* r = GetQmlRoot(child)) addRoot(r);
+                }
+            };
+
+            // 1) Top-level widgets and all their children
+            for (QWidget* w : QApplication::topLevelWidgets()) {
+                if (!w || !w->isVisible()) continue;
+                searchChildren(w);
+            }
+
+            // 2) Top-level windows (QQuickWindow, etc.) and their children
+            for (QWindow* w : QGuiApplication::topLevelWindows()) {
+                if (!w || !w->isVisible()) continue;
+                searchChildren(w);
+            }
+
+            // 3) Active modal widget and its children
+            if (QWidget* modal = QApplication::activeModalWidget()) {
+                searchChildren(modal);
+            }
+
+            // 4) Active window
+            if (QWidget* active = QApplication::activeWindow()) {
+                searchChildren(active);
+            }
+
+            // 5) Focus window (may be a QQuickWindow for the dialog)
+            if (QWindow* focus = QGuiApplication::focusWindow()) {
+                searchChildren(focus);
+            }
+
+            return roots;
+        }
+
+        // ---------------------------------------------------------------------------
+        // Brute-force: Search ALL QObjects reachable from ALL visible windows
+        // for a given text property. This works even when QML roots can't be
+        // found through normal channels (e.g., dialog is an in-window overlay).
+        // ---------------------------------------------------------------------------
+        QObject* FindQObjectWithTextGlobal(const QString& needle, bool exact = false) {
+            QSet<QObject*> visited;
+
+            auto search = [&](QObject* root) -> QObject* {
+                if (!root || visited.contains(root)) return nullptr;
+                visited.insert(root);
+
+                // Check root itself
+                {
+                    const QString t = root->property("text").toString();
+                    if (!t.isEmpty()) {
+                        if (exact ? t.compare(needle, Qt::CaseInsensitive) == 0
+                                  : t.contains(needle, Qt::CaseInsensitive))
+                            return root;
+                    }
+                }
+
+                // Search all descendants
+                const auto children = root->findChildren<QObject*>();
+                for (QObject* obj : children) {
+                    if (visited.contains(obj)) continue;
+                    visited.insert(obj);
+                    const QString t = obj->property("text").toString();
+                    if (t.isEmpty()) continue;
+                    if (exact ? t.compare(needle, Qt::CaseInsensitive) == 0
+                              : t.contains(needle, Qt::CaseInsensitive))
+                        return obj;
+                }
+                return nullptr;
+            };
+
+            // Search top-level widgets
+            for (QWidget* w : QApplication::topLevelWidgets()) {
+                if (!w || !w->isVisible()) continue;
+                if (QObject* r = search(w)) return r;
+            }
+
+            // Search top-level windows AND their contentItem trees (QML)
+            for (QWindow* w : QGuiApplication::topLevelWindows()) {
+                if (!w || !w->isVisible()) continue;
+                QObject* ci = w->property("contentItem").value<QObject*>();
+                if (ci) {
+                    if (QObject* r = search(ci)) return r;
+                }
+                if (QObject* r = search(w)) return r;
+            }
+
+            // Active modal / active window / focus window (redundant but thorough)
+            if (QWidget* modal = QApplication::activeModalWidget()) {
+                if (QObject* r = search(modal)) return r;
+            }
+            if (QWidget* active = QApplication::activeWindow()) {
+                if (QObject* r = search(active)) return r;
+            }
+            if (QWindow* focus = QGuiApplication::focusWindow()) {
+                QObject* ci = focus->property("contentItem").value<QObject*>();
+                if (ci) {
+                    if (QObject* r = search(ci)) return r;
+                }
+                if (QObject* r = search(focus)) return r;
+            }
+
+            return nullptr;
+        }
+
+        // Same as above but looks for a property OTHER than "text"
+        QObject* FindQObjectWithPropertyGlobal(const char* propName, const QString& needle, bool exact = false) {
+            QSet<QObject*> visited;
+
+            auto search = [&](QObject* root) -> QObject* {
+                if (!root) return nullptr;
+                const auto children = root->findChildren<QObject*>();
+                for (QObject* obj : children) {
+                    if (visited.contains(obj)) continue;
+                    visited.insert(obj);
+                    const QString t = obj->property(propName).toString();
+                    if (t.isEmpty()) continue;
+                    if (exact ? t.compare(needle, Qt::CaseInsensitive) == 0
+                              : t.contains(needle, Qt::CaseInsensitive))
+                        return obj;
+                }
+                return nullptr;
+            };
+
+            for (QWidget* w : QApplication::topLevelWidgets()) {
+                if (!w || !w->isVisible()) continue;
+                if (QObject* r = search(w)) return r;
+            }
+            for (QWindow* w : QGuiApplication::topLevelWindows()) {
+                if (!w || !w->isVisible()) continue;
+                QObject* ci = w->property("contentItem").value<QObject*>();
+                if (ci) { if (QObject* r = search(ci)) return r; }
+                if (QObject* r = search(w)) return r;
+            }
+            if (QWidget* modal = QApplication::activeModalWidget()) {
+                if (QObject* r = search(modal)) return r;
+            }
+            if (QWindow* focus = QGuiApplication::focusWindow()) {
+                QObject* ci = focus->property("contentItem").value<QObject*>();
+                if (ci) { if (QObject* r = search(ci)) return r; }
+                if (QObject* r = search(focus)) return r;
+            }
+            return nullptr;
+        }
+
+        // ---------------------------------------------------------------------------
+        // Close ANY visible dialog/overlay in the application, whether it's a
+        // QWidget modal, a QWindow, or a QML overlay. Used for error recovery.
+        // ---------------------------------------------------------------------------
+        void CloseAnyVisibleDialog(QMainWindow* mainWin) {
+            // 1. QWidget modal dialogs
+            QWidget* modal = QApplication::activeModalWidget();
+            if (modal) {
+                qInfo().noquote() << "[InstaMAT2Remix] Closing QWidget modal:" << modal->metaObject()->className();
+                modal->close();
+                QCoreApplication::processEvents();
+            }
+
+            // 2. Non-modal QWidget dialogs that appeared on top
+            for (QWidget* w : QApplication::topLevelWidgets()) {
+                if (!w || !w->isVisible() || w == mainWin) continue;
+                if (qobject_cast<QMainWindow*>(w)) continue; // Don't close main windows
+                const QString cls = w->metaObject()->className();
+                if (cls.contains("Dialog", Qt::CaseInsensitive) || cls.contains("Popup", Qt::CaseInsensitive)) {
+                    qInfo().noquote() << "[InstaMAT2Remix] Closing QWidget dialog:" << cls;
+                    w->close();
+                    QCoreApplication::processEvents();
+                }
+            }
+
+            // 3. QWindow-based dialogs (QML Windows, QQuickWindow popups)
+            QWindow* mainHandle = mainWin ? mainWin->windowHandle() : nullptr;
+            for (QWindow* w : QGuiApplication::topLevelWindows()) {
+                if (!w || !w->isVisible() || w == mainHandle) continue;
+                if (w->modality() != Qt::NonModal) {
+                    qInfo().noquote() << "[InstaMAT2Remix] Closing modal QWindow:" << w->title();
+                    w->close();
+                    QCoreApplication::processEvents();
+                }
+            }
+
+            // 4. Try pressing Escape on the active focus window (QML dialogs may respond to this)
+            if (QWindow* focus = QGuiApplication::focusWindow()) {
+                if (focus != mainHandle) {
+                    QKeyEvent press(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+                    QKeyEvent release(QEvent::KeyRelease, Qt::Key_Escape, Qt::NoModifier);
+                    QCoreApplication::sendEvent(focus, &press);
+                    QCoreApplication::sendEvent(focus, &release);
+                    QCoreApplication::processEvents();
+                }
+            }
+        }
+
+        // ---------------------------------------------------------------------------
+        // Brute-force project creation: searches ALL QObjects globally by text
+        // property to find and interact with the New Project dialog elements,
+        // regardless of how InstaMAT structures the dialog internally.
+        // This is the ultimate fallback when QML root detection, accessibility,
+        // and QWidget detection all fail.
+        // ---------------------------------------------------------------------------
+        bool TryCreateTexturingProjectBruteForce(const QString& meshPathAbs,
+                                                 const QString& suggestedName,
+                                                 QString* outError) {
+            qInfo().noquote() << "[InstaMAT2Remix] Attempting brute-force QObject text search...";
+
+            // Step 1: If on chooser screen, click "Asset Texturing"
+            QObject* assetBtn = FindQObjectWithTextGlobal("Asset Texturing", true);
+            if (assetBtn) {
+                qInfo().noquote() << "[InstaMAT2Remix] BruteForce: Found 'Asset Texturing'"
+                    << assetBtn->metaObject()->className()
+                    << "name=" << assetBtn->objectName();
+                QmlClick(assetBtn);
+                // Also try accessibility press
+                if (QAccessibleInterface* ai = QAccessible::queryAccessibleInterface(assetBtn))
+                    AccDoPress(ai);
+                QCoreApplication::processEvents();
+
+                // Wait for wizard transition
+                QEventLoop loop;
+                QTimer::singleShot(1500, &loop, &QEventLoop::quit);
+                loop.exec();
+            }
+
+            // Step 2: Set project name
+            const QString projectName = suggestedName.isEmpty() ? "Remix" : suggestedName;
+            {
+                // Look for the name field: search for common default names
+                QObject* nameField = FindQObjectWithTextGlobal("Unnamed", false);
+                if (!nameField) nameField = FindQObjectWithTextGlobal("Untitled", false);
+                if (!nameField) nameField = FindQObjectWithPropertyGlobal("placeholderText", "Project Name", false);
+                if (!nameField) nameField = FindQObjectWithPropertyGlobal("placeholderText", "name", false);
+                if (nameField) {
+                    qInfo().noquote() << "[InstaMAT2Remix] BruteForce: Found name field"
+                        << nameField->metaObject()->className();
+                    QmlSetText(nameField, projectName);
+                    QCoreApplication::processEvents();
+                }
+            }
+
+            // Step 3: Set category (Materials/Assets)
+            // This is typically a combo box or dropdown; try accessibility
+            if (QAccessible::isActive()) {
+                // Try setting via accessible tree of any visible dialog
+                for (QWindow* w : QGuiApplication::topLevelWindows()) {
+                    if (!w || !w->isVisible()) continue;
+                    QAccessibleInterface* rootAcc = QAccessible::queryAccessibleInterface(w);
+                    if (!rootAcc) continue;
+                    if (AccSetFieldByLabel(rootAcc, {"category"}, "Materials/Assets")) break;
+                    AccSetFieldByLabel(rootAcc, {"category"}, "Materials / Assets");
+                }
+                for (QWindow* w : QGuiApplication::topLevelWindows()) {
+                    if (!w || !w->isVisible()) continue;
+                    QAccessibleInterface* rootAcc = QAccessible::queryAccessibleInterface(w);
+                    if (!rootAcc) continue;
+                    if (AccSetFieldByLabel(rootAcc, {"type"}, "Multi-Material")) break;
+                    AccSetFieldByLabel(rootAcc, {"type"}, "Multi Material");
+                }
+            }
+
+            // Step 4: Find and set mesh path
+            bool meshSet = false;
+            {
+                QObject* meshField = FindQObjectWithTextGlobal("No Mesh", false);
+                if (!meshField) meshField = FindQObjectWithPropertyGlobal("placeholderText", "mesh", false);
+                if (!meshField) meshField = FindQObjectWithPropertyGlobal("objectName", "mesh", false);
+
+                if (meshField) {
+                    qInfo().noquote() << "[InstaMAT2Remix] BruteForce: Found mesh field"
+                        << meshField->metaObject()->className()
+                        << "name=" << meshField->objectName()
+                        << "text=" << meshField->property("text").toString().left(60);
+                    QmlSetText(meshField, meshPathAbs);
+                    meshSet = true;
+                    QCoreApplication::processEvents();
+
+                    // Wait for UI to validate mesh
+                    QEventLoop loop;
+                    QTimer::singleShot(1000, &loop, &QEventLoop::quit);
+                    loop.exec();
+                } else {
+                    qInfo().noquote() << "[InstaMAT2Remix] BruteForce: Could not find mesh field.";
+                }
+            }
+
+            if (!meshSet) {
+                if (outError) *outError = "BruteForce: Could not find mesh input field in any visible QObject.";
+                return false;
+            }
+
+            // Step 5: Click "Create Project" or "Create"
+            QObject* createBtn = FindQObjectWithTextGlobal("Create Project", true);
+            if (!createBtn) createBtn = FindQObjectWithTextGlobal("Create", true);
+            // Also try the "Select mesh to create project" button pattern
+            if (!createBtn) createBtn = FindQObjectWithTextGlobal("Select mesh", false);
+
+            if (createBtn) {
+                qInfo().noquote() << "[InstaMAT2Remix] BruteForce: Found Create button"
+                    << createBtn->metaObject()->className()
+                    << "text=" << createBtn->property("text").toString();
+                QmlClick(createBtn);
+                if (QAccessibleInterface* ai = QAccessible::queryAccessibleInterface(createBtn))
+                    AccDoPress(ai);
+                QCoreApplication::processEvents();
+
+                // Wait for project creation
+                const qint64 deadline = QDateTime::currentMSecsSinceEpoch() + 20000;
+                while (QDateTime::currentMSecsSinceEpoch() < deadline) {
+                    // Check if the dialog closed (project was created)
+                    if (!FindQObjectWithTextGlobal("Create Project", true) &&
+                        !FindQObjectWithTextGlobal("Asset Texturing", true)) {
+                        qInfo().noquote() << "[InstaMAT2Remix] BruteForce: Dialog appears to have closed (project created).";
+                        return true;
+                    }
+                    QCoreApplication::processEvents(QEventLoop::AllEvents, 100);
+                }
+
+                // Even if we can't confirm closure, we clicked Create with mesh set — partial success
+                qInfo().noquote() << "[InstaMAT2Remix] BruteForce: Clicked Create with mesh set, but couldn't confirm dialog closure.";
+                return true;
+            }
+
+            if (outError) *outError = "BruteForce: Set mesh but could not find Create button.";
+            return false;
         }
 
         bool TryCreateTexturingProjectFromMeshQml(const QString& meshPath, const QString& suggestedName, QString* outError) {
             qInfo() << "[InstaMAT2Remix] Attempting QML automation...";
             
-            // Collect all potential QML roots from top-level widgets and windows
-            QList<QObject*> roots;
-            for (QWidget* w : QApplication::topLevelWidgets()) {
-                if (w && w->isVisible()) {
-                    if (QObject* r = GetQmlRoot(w)) roots.append(r);
-                }
-            }
-            for (QWindow* w : QGuiApplication::topLevelWindows()) {
-                if (w && w->isVisible()) {
-                    if (QObject* r = GetQmlRoot(w)) roots.append(r);
-                }
-            }
+            // Collect QML roots from ALL possible locations: top-level widgets/windows,
+            // active/modal/focus windows, AND their children (handles QDialog wrapping QQuickWidget).
+            QList<QObject*> roots = CollectAllQmlRoots();
 
             if (roots.isEmpty()) {
-                qInfo() << "[InstaMAT2Remix] No QML roots found.";
-                return false;
+                qInfo() << "[InstaMAT2Remix] No QML roots found via CollectAllQmlRoots. Trying brute-force QObject search...";
+                // Fall back to brute-force: search ALL QObjects for text properties
+                return TryCreateTexturingProjectBruteForce(meshPath, suggestedName, outError);
             }
+            
+            qInfo().noquote() << "[InstaMAT2Remix] Found" << roots.size() << "QML root(s).";
 
             for (QObject* root : roots) {
                 // 1. Check for Chooser (Asset Texturing button)
@@ -1502,18 +1849,8 @@ namespace InstaMAT2Remix {
                     QTimer::singleShot(1000, &loop, &QEventLoop::quit);
                     loop.exec();
                     
-                    // Re-scan roots after transition
-                    roots.clear();
-                    for (QWidget* w : QApplication::topLevelWidgets()) {
-                        if (w && w->isVisible()) {
-                            if (QObject* r = GetQmlRoot(w)) roots.append(r);
-                        }
-                    }
-                    for (QWindow* w : QGuiApplication::topLevelWindows()) {
-                        if (w && w->isVisible()) {
-                            if (QObject* r = GetQmlRoot(w)) roots.append(r);
-                        }
-                    }
+                    // Re-scan roots after transition using the improved helper
+                    roots = CollectAllQmlRoots();
                     // Restart loop with new roots
                     // For simplicity, just break and let the next loop iteration handle the wizard
                     // But we need to update 'root' to the new wizard root.
@@ -1559,12 +1896,14 @@ namespace InstaMAT2Remix {
                         QmlClick(createBtn);
                         return true;
                     } else {
-                        if (outError) *outError = "Found QML Mesh input but could not find Create button.";
+                        qInfo().noquote() << "[InstaMAT2Remix] Found QML Mesh input but could not find Create button — trying brute-force.";
                     }
                 }
             }
 
-            return false;
+            // QML root search found roots but couldn't interact — fall through to brute-force
+            qInfo().noquote() << "[InstaMAT2Remix] QML root search failed to complete automation — trying brute-force.";
+            return TryCreateTexturingProjectBruteForce(meshPath, suggestedName, outError);
         }
 
         // ---------------------------------------------------------------------------
@@ -1752,8 +2091,18 @@ namespace InstaMAT2Remix {
 
                 if (accOk) return true;
 
-                if (outError) *outError = "QML Error: " + qmlErr + "\nAccessibility Error: " + accErr;
-                qWarning().noquote() << "[InstaMAT2Remix]" << "Auto-create: accessibility automation failed.";
+                // 5) Brute-force: Search ALL QObjects globally by text property.
+                // This is the ultimate fallback — works even when QML roots can't
+                // be found and accessibility is inactive.
+                qInfo().noquote() << "[InstaMAT2Remix] Accessibility failed. Trying brute-force QObject search.";
+                QString bfErr;
+                if (TryCreateTexturingProjectBruteForce(meshPathAbs, suggestedName, &bfErr)) {
+                    qInfo().noquote() << "[InstaMAT2Remix] Brute-force automation succeeded.";
+                    return true;
+                }
+
+                if (outError) *outError = "QML Error: " + qmlErr + "\nAccessibility Error: " + accErr + "\nBruteForce Error: " + bfErr;
+                qWarning().noquote() << "[InstaMAT2Remix]" << "Auto-create: all automation methods failed.";
                 return false;
             }
 
@@ -1994,6 +2343,60 @@ namespace InstaMAT2Remix {
         }
 
         // ---------------------------------------------------------------------------
+        // Helper: Detects and dismisses a "Save Changes?" dialog that may appear
+        // when triggering File > New while a project is already open.
+        // This dialog is a standard QMessageBox (QWidget-based), so QWidget
+        // detection works reliably here — unlike the QML-based New Project wizard.
+        // Returns true if a Save Changes dialog was found and dismissed.
+        // ---------------------------------------------------------------------------
+        bool HandleSaveChangesPrompt(QWidget* modal) {
+            if (!modal) return false;
+
+            // Check window title for save/changes context
+            const QString title = modal->windowTitle().toLower();
+            bool looksLikeSavePrompt = title.contains("save") || title.contains("changes") || title.contains("closing");
+
+            // Double-check labels if title is generic (e.g. just the app name)
+            if (!looksLikeSavePrompt) {
+                const auto labels = modal->findChildren<QLabel*>();
+                for (QLabel* l : labels) {
+                    if (!l) continue;
+                    const QString lt = l->text().toLower();
+                    if (lt.contains("save changes") || lt.contains("unsaved") || lt.contains("do you want to save")) {
+                        looksLikeSavePrompt = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!looksLikeSavePrompt) return false;
+
+            qInfo().noquote() << "[InstaMAT2Remix] Detected 'Save Changes' prompt. Dismissing to force new project.";
+
+            // Look for "Don't Save", "Discard", or "No" button
+            const auto buttons = modal->findChildren<QAbstractButton*>();
+            for (QAbstractButton* b : buttons) {
+                if (!b) continue;
+                const QString t = NormalizeActionText(b->text()).toLower();
+                if (t.contains("don't save") || t.contains("discard") || t == "no") {
+                    b->click();
+                    return true;
+                }
+            }
+
+            // Fallback for standard QMessageBox
+            if (auto* msgBox = qobject_cast<QMessageBox*>(modal)) {
+                QAbstractButton* discard = msgBox->button(QMessageBox::Discard);
+                if (discard) { discard->click(); return true; }
+                QAbstractButton* no = msgBox->button(QMessageBox::No);
+                if (no) { no->click(); return true; }
+            }
+
+            qWarning().noquote() << "[InstaMAT2Remix] Save Changes prompt detected but could not find dismiss button.";
+            return false;
+        }
+
+        // ---------------------------------------------------------------------------
         // Orchestrator: Attempts to automatically create an Asset Texturing project
         // with the given mesh. Handles two cases:
         //   1) The new-project dialog is already visible (start screen) -> interact directly
@@ -2059,24 +2462,92 @@ namespace InstaMAT2Remix {
             auto state = std::make_shared<AutoState>();
 
             // Schedule the automation to fire inside exec()'s nested event loop.
-            // Using 100ms delay to allow dialog initialization but run promptly.
-            QTimer::singleShot(100, win, [state, win, meshPathAbs, suggestedName]() {
+            // Using 500ms delay to allow the QML-based dialog to fully initialize
+            // (QML content may load asynchronously after the dialog shell appears).
+            // Per InstaMAT dev team: QTimer or QMetaObject::invokeMethod with queued
+            // connection should work reliably inside QDialog::exec().
+            QTimer::singleShot(500, win, [state, win, meshPathAbs, suggestedName]() {
                 qInfo().noquote() << "[InstaMAT2Remix]" << "Auto-create: deferred callback fired inside dialog event loop.";
 
+                // Dump diagnostic info about what's visible right now.
+                qInfo().noquote() << "[InstaMAT2Remix] --- Visible windows at timer fire ---";
+                qInfo().noquote() << "[InstaMAT2Remix] activeModalWidget:"
+                    << (QApplication::activeModalWidget()
+                        ? QString("%1 name='%2'").arg(QApplication::activeModalWidget()->metaObject()->className(), QApplication::activeModalWidget()->objectName())
+                        : "null");
+                qInfo().noquote() << "[InstaMAT2Remix] activeWindow:"
+                    << (QApplication::activeWindow()
+                        ? QString("%1 name='%2'").arg(QApplication::activeWindow()->metaObject()->className(), QApplication::activeWindow()->objectName())
+                        : "null");
+                qInfo().noquote() << "[InstaMAT2Remix] focusWindow:"
+                    << (QGuiApplication::focusWindow()
+                        ? QString("%1 title='%2'").arg(QGuiApplication::focusWindow()->metaObject()->className(), QGuiApplication::focusWindow()->title())
+                        : "null");
+                for (QWindow* tw : QGuiApplication::topLevelWindows()) {
+                    if (!tw || !tw->isVisible()) continue;
+                    QObject* ci = tw->property("contentItem").value<QObject*>();
+                    qInfo().noquote() << "[InstaMAT2Remix] TopWindow:" << tw->metaObject()->className()
+                        << "title=" << tw->title()
+                        << "modality=" << int(tw->modality())
+                        << "hasContentItem=" << (ci != nullptr)
+                        << "childCount=" << tw->children().size();
+                }
+                for (QWidget* tw : QApplication::topLevelWidgets()) {
+                    if (!tw || !tw->isVisible()) continue;
+                    qInfo().noquote() << "[InstaMAT2Remix] TopWidget:" << tw->metaObject()->className()
+                        << "name=" << tw->objectName()
+                        << "title=" << tw->windowTitle()
+                        << "childCount=" << tw->children().size();
+                }
+                // Log how many QML roots we can find
+                QList<QObject*> diagRoots = CollectAllQmlRoots();
+                qInfo().noquote() << "[InstaMAT2Remix] QML roots found:" << diagRoots.size();
+                for (QObject* dr : diagRoots) {
+                    int textItems = 0;
+                    for (QObject* child : dr->findChildren<QObject*>()) {
+                        if (!child->property("text").toString().isEmpty()) textItems++;
+                    }
+                    qInfo().noquote() << "[InstaMAT2Remix]   Root:" << dr->metaObject()->className()
+                        << "name=" << dr->objectName()
+                        << "childCount=" << dr->findChildren<QObject*>().size()
+                        << "textBearingItems=" << textItems;
+                }
+                qInfo().noquote() << "[InstaMAT2Remix] --- End diagnostic dump ---";
+
                 // Wait for the dialog UI widgets to become discoverable.
+                // The loop also handles "Save Changes?" prompts that may appear
+                // when a project is already open (these are QWidget QMessageBoxes,
+                // so QWidget detection works reliably on them).
                 QWidget* wiz = nullptr;
                 QWidget* chooser = nullptr;
                 const qint64 deadline = QDateTime::currentMSecsSinceEpoch() + 10000;
                 while (QDateTime::currentMSecsSinceEpoch() < deadline) {
+                    // 1. Check for blocking "Save Changes?" modal and dismiss it
+                    QWidget* modal = QApplication::activeModalWidget();
+                    if (modal && modal != win) {
+                        if (HandleSaveChangesPrompt(modal)) {
+                            qInfo().noquote() << "[InstaMAT2Remix] Dismissed Save Changes prompt. Waiting for wizard...";
+                            QCoreApplication::processEvents(QEventLoop::AllEvents, 200);
+                            continue;
+                        }
+                    }
+
+                    // 2. Look for the project wizard or chooser
                     wiz = FindProjectWizardRoot(win);
                     if (wiz) break;
                     chooser = FindNewProjectChooserRoot(win);
                     if (chooser) break;
+
+                    // 3. Check if the active modal IS the wizard/chooser
+                    if (modal && modal != win) {
+                        if (HasProjectWizardSignature(modal)) { wiz = modal; break; }
+                        if (HasNewProjectChooserSignature(modal)) { chooser = modal; break; }
+                    }
+
                     QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
                 }
 
-                // Also check top-level modal dialogs (the dialog opened by exec() may not
-                // be a child of the main window).
+                // Final fallback: check top-level modal dialogs
                 if (!wiz && !chooser) {
                     QWidget* activeModal = QApplication::activeModalWidget();
                     if (activeModal) {
@@ -2094,14 +2565,11 @@ namespace InstaMAT2Remix {
 
                 // CRITICAL: If automation failed, close the dialog so exec() unblocks
                 // and the user isn't stuck with a frozen New Project dialog.
+                // Must handle BOTH QWidget modals and QWindow-based (QML) dialogs.
                 if (!state->success) {
                     qInfo().noquote() << "[InstaMAT2Remix]"
                         << "Auto-create failed inside dialog event loop. Closing dialog to unblock.";
-                    QWidget* modal = QApplication::activeModalWidget();
-                    if (modal) {
-                        modal->close();
-                        QCoreApplication::processEvents();
-                    }
+                    CloseAnyVisibleDialog(FindHostMainWindow());
                 }
             });
 

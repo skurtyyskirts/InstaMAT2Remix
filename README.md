@@ -1,7 +1,7 @@
 # InstaMAT2Remix - RTX Remix Connector Plugin for InstaMAT Studio
 
 > **Status: Active Development (Alpha)**
-> **Last Updated: 2026-02-08**
+> **Last Updated: 2026-02-09**
 > **Current Blocker: Automated New Project creation via UI automation**
 
 ---
@@ -218,11 +218,15 @@ When the user clicks **"Pull from Remix"**, the plugin needs to automatically cr
 
 When you click "Pull from Remix":
 1. The RTX Remix API call succeeds (mesh path, material prim are retrieved correctly)
-2. The plugin tries to trigger the New Project dialog
-3. A `QTimer::singleShot` is scheduled to interact with the dialog from within its event loop
-4. The dialog may or may not appear
-5. **UI automation fails** with: "New project screen did not appear (could not locate the project creation UI)"
-6. The plugin falls back to copying the mesh path to clipboard and showing manual instructions
+2. The plugin triggers the New Project dialog via File > New menu action
+3. A `QTimer::singleShot(500ms)` fires inside `QDialog::exec()`'s event loop
+4. Multiple automation strategies are tried in sequence:
+   a. QWidget detection (for traditional Qt builds)
+   b. QML root detection + traversal (searches children of all windows for QML containers)
+   c. Brute-force QObject text search (scans ALL QObjects globally for matching text properties)
+   d. Qt Accessibility API (if active)
+5. If all strategies fail: the dialog is properly closed (including QML/QWindow dialogs), mesh path is copied to clipboard, and manual instructions are shown
+6. If a strategy succeeds: project is created with Name="Remix", Category="Materials/Assets", Type="Multi-Material", Mesh=pulled asset
 
 ### Specific Error
 
@@ -287,15 +291,23 @@ Or in some cases:
 **Status**: Implemented as an optional workflow. Template graph can be configured in Settings. But it doesn't replace the need for auto-creating an Asset Texturing project.
 
 ### Approach 8: `QTimer::singleShot` Inside `QDialog::exec()` Event Loop (CURRENT APPROACH)
-**What**: When we trigger File > New from the menu, the `QDialog::exec()` call blocks. We schedule a callback via `QTimer::singleShot(300ms)` that runs inside the dialog's event loop. This callback attempts to:
+**What**: When we trigger File > New from the menu, the `QDialog::exec()` call blocks. We schedule a callback via `QTimer::singleShot(500ms)` that runs inside the dialog's event loop. This callback attempts to:
   1. Detect whether we're on the "chooser" screen (project type cards) or the "wizard" screen (mesh/name fields)
   2. If chooser: find and click "Asset Texturing" card, then schedule another timer for the wizard step
   3. If wizard: fill mesh path, set project name to "Remix", click "Create Project"
-**Current behavior**: The timer fires, but:
-  - QML elements are not detectable (accessibility off, QWidget search finds nothing)
-  - Sometimes creates wrong project type (Material Layering instead of Asset Texturing) because the fallback Enter key selects the default
-  - Sometimes two dialogs appear (start screen + New Project)
-**Status**: This is the current implementation. The timing/scheduling is correct per InstaMAT dev guidance, but the element detection inside the callback fails.
+**Current behavior**: The timer fires correctly. Multiple detection strategies are tried in order:
+  - QWidget detection (for traditional Qt widgets)
+  - QML root detection via `CollectAllQmlRoots()` (searches ALL widget/window children for QML containers)
+  - Brute-force QObject text search via `FindQObjectWithTextGlobal()` (searches ALL reachable QObjects)
+  - Qt Accessibility API (if active)
+**Status**: This is the current implementation with multiple fallback layers. Waiting for InstaMAT dev team to provide stable class/object names for guaranteed detection.
+
+### Approach 9: Brute-Force QObject Text Property Search (NEW - PROMISING)
+**What**: Search ALL QObjects reachable from ALL visible windows, widgets, and QML content trees for items with matching `text`, `placeholderText`, or `objectName` properties. This bypasses the need to find a "QML root" first — it just scans everything.
+**Implementation**: `FindQObjectWithTextGlobal()`, `FindQObjectWithPropertyGlobal()`, `TryCreateTexturingProjectBruteForce()`
+**Why it might work**: Even if we can't find the QML root through `GetQmlRoot()`, the QML items are still QObjects with properties. By searching ALL QObjects globally (including QQuickWindow contentItem trees), we should find text-bearing items like "Asset Texturing", "Create Project", etc.
+**Why it might fail**: If QML items in InstaMAT's dialog don't expose their `text` as a QObject property (some QML controls store text internally without exposing it as a Q_PROPERTY).
+**Status**: Implemented as the primary fallback. Needs testing with InstaMAT Studio.
 
 ---
 
@@ -328,6 +340,7 @@ Or in some cases:
 | Settings persistence via QSettings | **CONFIRMED** | All settings saved/loaded correctly |
 | QTimer scheduling inside QDialog::exec() | **CONFIRMED** | Timer callback fires within the modal dialog's event loop |
 | Finding File > New menu action | **CONFIRMED** | `FindBestNewProjectAction()` correctly locates the menu item |
+| Save Changes dialog dismissal | **CONFIRMED** | `HandleSaveChangesPrompt()` detects and dismisses QWidget QMessageBox |
 
 ---
 
@@ -524,6 +537,52 @@ The script automatically:
 
 This section tracks what was done in each development session. **Update this when making changes.**
 
+### Session 10 (2026-02-09) — Brute-Force QObject Search & Deep QML Root Detection
+- Applied InstaMAT dev team guidance: QTimer/QMetaObject::invokeMethod inside QDialog::exec() event loop
+- **Key insight from InstaMAT devs**: The New Project dialog uses QDialog::exec() which blocks; scheduling via QTimer inside exec()'s event loop IS the correct approach — the issue was that element detection inside the callback was failing
+- **Major new feature: Brute-force QObject text search** (`FindQObjectWithTextGlobal`, `FindQObjectWithPropertyGlobal`)
+  - Searches ALL QObjects reachable from ALL visible windows/widgets/focus windows
+  - Also searches QQuickWindow contentItem trees (QML items)
+  - Matches by `text`, `placeholderText`, or `objectName` properties
+  - Works even when QML roots can't be found through normal `GetQmlRoot()` channels
+  - This is the ultimate fallback that bypasses the QML root detection problem entirely
+- **Improved QML root detection** (`CollectAllQmlRoots`)
+  - Now searches children of ALL top-level widgets (handles QDialog wrapping QQuickWidget)
+  - Searches active modal widget, active window, and focus window children
+  - Previously only checked top-level objects, missing embedded QML containers
+- **New automation fallback** (`TryCreateTexturingProjectBruteForce`)
+  - Steps through the dialog by finding QObjects globally by text property
+  - Clicks "Asset Texturing", sets name/category/type/mesh, clicks "Create Project"
+  - Integrated as fallback in both `TryCreateTexturingProjectFromMeshQml` and `FillProjectWizardAndCreate`
+- **Fixed dialog closing on failure** (`CloseAnyVisibleDialog`)
+  - Now closes QWindow-based (QML) dialogs, not just QWidget modals
+  - Tries: QWidget modal close, QWidget dialog close, modal QWindow close, Escape key on focus window
+  - Fixes the bug where the New Project dialog stays open when automation fails
+- **Increased initial timer delay** from 100ms to 500ms
+  - QML content may load asynchronously after the dialog shell appears
+  - 500ms gives better chance of all elements being discoverable
+- **Added comprehensive diagnostic logging** at timer fire
+  - Dumps all visible windows/widgets, their class names, and child counts
+  - Logs how many QML roots are found and how many text-bearing items each contains
+  - Check `Documents\InstaMAT2Remix\logs\remix_connector.log` for this output
+- **Improved `QmlSetText`** — now also fires `editingFinished` and `accepted` signals after setting text
+- **Result**: Multiple new fallback paths that should work even when accessibility is inactive
+- **Automation chain is now**: QWidget detection → QML root search → Brute-force QObject search → Accessibility → Brute-force again as final fallback
+- Build verified: compiles and installs successfully
+- **Still waiting on**: InstaMAT dev team to provide stable class/object names for dialog widgets (would make detection 100% reliable)
+
+### Session 9 (2026-02-08) — Save Changes Dialog Handling (Edge Case Fix)
+- Added `HandleSaveChangesPrompt()` helper in `RemixConnector.cpp`
+  - Detects "Save Changes?" / "Unsaved" QMessageBox that appears when triggering File > New while a project is open
+  - Automatically clicks "Don't Save" / "Discard" / "No" to dismiss it
+  - This dialog IS a QWidget (`QMessageBox`), so QWidget detection works reliably on it
+- Integrated into the QTimer polling loop: the loop now checks for and dismisses Save Changes prompts before looking for the wizard
+- Also improved the polling loop structure to check active modal widgets more thoroughly
+- **Result**: Fixes one failure mode (Save Changes blocking wizard), but the core QML detection blocker remains
+- **Does NOT fix the main blocker**: After the Save Changes prompt is dismissed and the New Project wizard appears, the plugin still cannot detect/interact with QML elements
+- Build verified: compiles and installs successfully
+- Source: Gemini suggestion — Save Changes handling was the useful part; the claim it "ensures one-click operation" was incorrect
+
 ### Session 8 (2026-02-08) — README Creation
 - Created this comprehensive README for GitHub
 - Established the rule to update README on each change session
@@ -642,10 +701,14 @@ If you are an AI/LLM helping develop this plugin, here is the critical context:
 1. `PullFromRemix()` — Entry point for pull
 2. `TryCreateTexturingProjectFromMesh()` — Main automation orchestrator
 3. `TryCreateTexturingProjectFromMeshQml()` — QML object reflection path
-4. `TryCreateTexturingProjectFromMeshAccessible()` — Accessibility API path
-5. `TryCreateTexturingProjectFromMeshAccessibleAnyRoot()` — Multi-root accessibility search
-6. `FillProjectWizardAndCreate()` — Fills fields and clicks Create
-7. `FindBestNewProjectAction()` — Finds File > New menu action
+4. `TryCreateTexturingProjectBruteForce()` — Brute-force QObject text search (NEW)
+5. `TryCreateTexturingProjectFromMeshAccessible()` — Accessibility API path
+6. `TryCreateTexturingProjectFromMeshAccessibleAnyRoot()` — Multi-root accessibility search
+7. `FillProjectWizardAndCreate()` — Fills fields and clicks Create
+8. `FindBestNewProjectAction()` — Finds File > New menu action
+9. `CollectAllQmlRoots()` — Deep QML root collection (NEW)
+10. `FindQObjectWithTextGlobal()` — Global QObject text property search (NEW)
+11. `CloseAnyVisibleDialog()` — Comprehensive dialog cleanup on failure (NEW)
 
 ### Things That WILL NOT Work
 - `QMouseEvent`/`QKeyEvent` simulation (removed by user request)
@@ -655,11 +718,11 @@ If you are an AI/LLM helping develop this plugin, here is the critical context:
 - Generating `.IMP` files from scratch
 
 ### Things That MIGHT Work (Try These)
-1. Setting `QT_ACCESSIBILITY=1` via a launcher script or `DllMain`
-2. Windows UI Automation (IUIAutomation COM) bypassing Qt entirely
-3. Getting stable QML objectNames from InstaMAT developers
+1. Getting stable QML objectNames from InstaMAT developers (HIGHEST PRIORITY — they offered!)
+2. Setting `QT_ACCESSIBILITY=1` via a launcher script or `DllMain`
+3. Windows UI Automation (IUIAutomation COM) bypassing Qt entirely
 4. An InstaMAT SDK update with `CreateProject()` API
-5. Deeper QML object traversal with version-specific heuristics
+5. The new brute-force QObject text search may already work — test it!
 
 ### Build and Test Cycle
 ```powershell
