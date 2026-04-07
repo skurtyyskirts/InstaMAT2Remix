@@ -25,6 +25,7 @@ namespace InstaMAT2Remix {
         void onImportTexturesFromRemix();
         void onPushToRemix();
         void onForcePushToRemix();
+        void onRelinkMaterial();
         void onSettings();
         void onDiagnostics();
         void onAbout();

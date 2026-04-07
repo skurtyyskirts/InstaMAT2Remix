@@ -180,6 +180,7 @@ namespace InstaMAT2Remix {
         ensureAction("Import Textures from Remix", &GuiManager::onImportTexturesFromRemix);
         ensureAction("Push to Remix", &GuiManager::onPushToRemix);
         ensureAction("Force Push to Remix", &GuiManager::onForcePushToRemix);
+        ensureAction("Relink Material", &GuiManager::onRelinkMaterial);
 
         m_remixMenu->addSeparator();
         ensureAction("Settings", &GuiManager::onSettings);
@@ -237,6 +238,11 @@ namespace InstaMAT2Remix {
     void GuiManager::onForcePushToRemix() {
         if (!m_connector) return;
         m_connector->PushToRemix(true);
+    }
+
+    void GuiManager::onRelinkMaterial() {
+        if (!m_connector) return;
+        m_connector->RelinkMaterial();
     }
 
     void GuiManager::onSettings() {
