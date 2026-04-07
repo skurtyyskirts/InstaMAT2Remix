@@ -3393,8 +3393,7 @@ namespace InstaMAT2Remix {
 
             // Close our progress before ImportTexturesFromRemix shows its own.
             progress.close();
-            ImportTexturesFromRemix();
-            texturesImported = true;
+            texturesImported = ImportTexturesFromRemix();
         }
 
         // Step 5: Summary.
@@ -3414,7 +3413,7 @@ namespace InstaMAT2Remix {
         QMessageBox::information(nullptr, kPluginName, summary.join("\n"));
     }
 
-    void RemixConnector::ImportTexturesFromRemix() {
+    bool RemixConnector::ImportTexturesFromRemix() {
         QSettings settings("InstaMAT2Remix", "Config");
 
         QString materialPrim = settings.value("LinkedMaterialPrim", "").toString();
@@ -3422,7 +3421,7 @@ namespace InstaMAT2Remix {
             QString selErr;
             if (!GetSelectedMaterialPrim(materialPrim, selErr)) {
                 QMessageBox::warning(nullptr, "InstaMAT2Remix", "Import Textures failed:\n\nNo linked material and selection query failed:\n" + selErr);
-                return;
+                return false;
             }
             settings.setValue("LinkedMaterialPrim", materialPrim);
             m_linkedMaterialPrim = materialPrim.toStdString();
@@ -3432,7 +3431,7 @@ namespace InstaMAT2Remix {
         QString dirErr;
         if (!GetRemixDefaultDirectory(remixDirAbs, dirErr)) {
             QMessageBox::warning(nullptr, "InstaMAT2Remix", "Import Textures failed:\n\nCould not determine Remix project directory:\n" + dirErr);
-            return;
+            return false;
         }
 
         const QString destDir = GetPulledTexturesDir(remixDirAbs);
@@ -3442,13 +3441,13 @@ namespace InstaMAT2Remix {
         const QJsonDocument doc = RequestJson("GET", QString("/stagecraft/assets/%1/textures").arg(encodedMat), {}, nullptr, &apiErr);
         if (doc.isNull() || !doc.isObject()) {
             QMessageBox::warning(nullptr, "InstaMAT2Remix", "Import Textures failed:\n\n" + apiErr);
-            return;
+            return false;
         }
 
         const QJsonArray textures = doc.object().value("textures").toArray();
         if (textures.isEmpty()) {
             QMessageBox::information(nullptr, "InstaMAT2Remix", "No textures were returned for the material:\n\n" + materialPrim);
-            return;
+            return false;
         }
 
         QProgressDialog progress("Importing textures from RTX Remix...", "Cancel", 0, textures.size(), nullptr);
@@ -3508,7 +3507,7 @@ namespace InstaMAT2Remix {
 
         if (progress.wasCanceled()) {
             QMessageBox::information(nullptr, "InstaMAT2Remix", "Import cancelled.");
-            return;
+            return false;
         }
 
         QMessageBox::information(nullptr,
@@ -3517,6 +3516,7 @@ namespace InstaMAT2Remix {
                                      .arg(pulledCount)
                                      .arg(convertedCount)
                                      .arg(destDir));
+        return pulledCount > 0;
     }
 
     void RemixConnector::PushToRemix(bool forceDialog) {

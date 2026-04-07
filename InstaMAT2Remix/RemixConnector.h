@@ -34,7 +34,7 @@ namespace InstaMAT2Remix {
 
         // UI actions
         void PullFromRemix(bool autoUnwrap, PullMeshMode meshMode = PullMeshMode::UseSettings);
-        void ImportTexturesFromRemix();
+        bool ImportTexturesFromRemix();
         void PushToRemix(bool forceDialog);
         void RelinkMaterial();
 
