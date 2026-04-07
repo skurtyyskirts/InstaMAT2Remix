@@ -146,6 +146,19 @@ IM2R_EXPORT bool ForcePushToRemix() {
     return true;
 }
 
+IM2R_EXPORT bool RelinkMaterial() {
+    QString err;
+    auto* connector = GetConnector(err);
+    if (!connector) {
+        ShowHostError(err);
+        return false;
+    }
+
+    connector->ReloadSettings();
+    connector->RelinkMaterial();
+    return true;
+}
+
 IM2R_EXPORT bool OpenSettingsDialog() {
     QString err;
     auto* connector = GetConnector(err);

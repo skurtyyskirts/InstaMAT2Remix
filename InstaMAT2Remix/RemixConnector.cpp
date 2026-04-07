@@ -42,6 +42,7 @@
 #include <QSettings>
 #include <QStandardPaths>
 #include <QStringList>
+#include <QThread>
 #include <QTimer>
 #include <QUrl>
 #include <QUrlQuery>
@@ -2736,62 +2737,93 @@ namespace InstaMAT2Remix {
             req.setTransferTimeout(timeoutMs);
         }
 
-        QNetworkAccessManager mgr;
-        QNetworkReply* reply = nullptr;
-
         const QByteArray payload = body ? body->toJson(QJsonDocument::Compact) : QByteArray();
         const QString m = method.toUpper();
-        if (m == "GET") reply = mgr.get(req);
-        else if (m == "POST") reply = mgr.post(req, payload);
-        else if (m == "PUT") reply = mgr.put(req, payload);
-        else if (m == "DELETE") reply = mgr.deleteResource(req);
-        else {
-            if (outError) *outError = "Unsupported HTTP method: " + method;
-            return {};
-        }
 
-        QEventLoop loop;
-        QTimer timeoutTimer;
-        timeoutTimer.setSingleShot(true);
-        int timeoutMs = 60000;
-        {
-            QSettings settings("InstaMAT2Remix", "Config");
-            const double sec = settings.value("PollTimeoutSec", 60.0).toDouble();
-            timeoutMs = qMax(200, int(sec * 1000.0));
-        }
-        timeoutTimer.start(timeoutMs);
-        QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
-        QObject::connect(&timeoutTimer, &QTimer::timeout, &loop, &QEventLoop::quit);
-        loop.exec();
+        // Retry loop: 3 attempts with 2s/4s backoff (matching Substance2Remix behavior).
+        constexpr int kMaxAttempts = 3;
+        const int retryDelaysMs[] = {2000, 4000};
+        QString lastError;
 
-        if (!reply->isFinished()) {
-            reply->abort();
-            if (outError) *outError = "RTX Remix API request timed out.";
+        for (int attempt = 0; attempt < kMaxAttempts; ++attempt) {
+            if (attempt > 0) {
+                qInfo().noquote() << "[InstaMAT2Remix] Retry" << attempt << "of" << (kMaxAttempts - 1) << "for" << endpoint;
+                QThread::msleep(retryDelaysMs[attempt - 1]);
+            }
+
+            QNetworkAccessManager mgr;
+            QNetworkReply* reply = nullptr;
+
+            if (m == "GET") reply = mgr.get(req);
+            else if (m == "POST") reply = mgr.post(req, payload);
+            else if (m == "PUT") reply = mgr.put(req, payload);
+            else if (m == "DELETE") reply = mgr.deleteResource(req);
+            else {
+                if (outError) *outError = "Unsupported HTTP method: " + method;
+                return {};
+            }
+
+            QEventLoop loop;
+            QTimer timeoutTimer;
+            timeoutTimer.setSingleShot(true);
+            int timeoutMs = 60000;
+            {
+                QSettings settings("InstaMAT2Remix", "Config");
+                const double sec = settings.value("PollTimeoutSec", 60.0).toDouble();
+                timeoutMs = qMax(200, int(sec * 1000.0));
+            }
+            timeoutTimer.start(timeoutMs);
+            QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
+            QObject::connect(&timeoutTimer, &QTimer::timeout, &loop, &QEventLoop::quit);
+            loop.exec();
+
+            if (!reply->isFinished()) {
+                reply->abort();
+                lastError = "RTX Remix API request timed out.";
+                reply->deleteLater();
+                continue; // Retry on timeout
+            }
+
+            const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+            const QByteArray bytes = reply->readAll();
+
+            const auto errCode = reply->error();
+            if (errCode != QNetworkReply::NoError) {
+                QString details = reply->errorString();
+                if (!bytes.isEmpty()) details += " | " + QString::fromUtf8(bytes.left(600));
+                lastError = QString("HTTP %1: %2").arg(status).arg(details);
+                reply->deleteLater();
+
+                // Only retry on network/connection errors, not on HTTP 4xx/5xx.
+                if (errCode == QNetworkReply::ConnectionRefusedError ||
+                    errCode == QNetworkReply::RemoteHostClosedError ||
+                    errCode == QNetworkReply::HostNotFoundError ||
+                    errCode == QNetworkReply::TimeoutError ||
+                    errCode == QNetworkReply::TemporaryNetworkFailureError ||
+                    errCode == QNetworkReply::NetworkSessionFailedError ||
+                    errCode == QNetworkReply::UnknownNetworkError) {
+                    continue; // Retry on network errors
+                }
+                // Non-retriable error (4xx, 5xx, etc.)
+                if (outError) *outError = lastError;
+                return {};
+            }
+
+            QJsonParseError perr;
+            QJsonDocument doc = QJsonDocument::fromJson(bytes, &perr);
+            if (perr.error != QJsonParseError::NoError) {
+                if (outError) *outError = "Invalid JSON response: " + perr.errorString();
+                reply->deleteLater();
+                return {};
+            }
+
             reply->deleteLater();
-            return {};
+            return doc;
         }
 
-        const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-        const QByteArray bytes = reply->readAll();
-
-        if (reply->error() != QNetworkReply::NoError) {
-            QString details = reply->errorString();
-            if (!bytes.isEmpty()) details += " | " + QString::fromUtf8(bytes.left(600));
-            if (outError) *outError = QString("HTTP %1: %2").arg(status).arg(details);
-            reply->deleteLater();
-            return {};
-        }
-
-        QJsonParseError perr;
-        QJsonDocument doc = QJsonDocument::fromJson(bytes, &perr);
-        if (perr.error != QJsonParseError::NoError) {
-            if (outError) *outError = "Invalid JSON response: " + perr.errorString();
-            reply->deleteLater();
-            return {};
-        }
-
-        reply->deleteLater();
-        return doc;
+        // All retries exhausted.
+        if (outError) *outError = lastError.isEmpty() ? "Request failed after retries." : lastError;
+        return {};
     }
 
     bool RemixConnector::GetRemixDefaultDirectory(QString& outDirAbs, QString& outError) const {
@@ -3165,13 +3197,52 @@ namespace InstaMAT2Remix {
         return true;
     }
 
+    void RemixConnector::RelinkMaterial() {
+        QSettings settings("InstaMAT2Remix", "Config");
+
+        // Clear cached link.
+        settings.remove("LinkedMaterialPrim");
+        m_linkedMaterialPrim.clear();
+
+        // Query Remix for current selection.
+        QString materialPrim, err;
+        if (!GetSelectedMaterialPrim(materialPrim, err)) {
+            QMessageBox::warning(nullptr, kPluginName,
+                "Relink failed:\n\nCould not get material from RTX Remix:\n" + err);
+            return;
+        }
+
+        settings.setValue("LinkedMaterialPrim", materialPrim);
+        m_linkedMaterialPrim = materialPrim.toStdString();
+        m_logger.Info("Relinked to material: " + materialPrim);
+
+        QMessageBox::information(nullptr, kPluginName,
+            "Relinked to material:\n\n" + materialPrim);
+    }
+
     void RemixConnector::PullFromRemix(bool autoUnwrap, PullMeshMode meshMode) {
+        // ---------------------------------------------------------------------------
+        // One-button pull flow with progress dialog (matching Substance2Remix UX).
+        // Steps: Query Remix → Unwrap → Create Project → Template Auto-Run → Import
+        // ---------------------------------------------------------------------------
+        QProgressDialog progress("Querying RTX Remix for selection...", "Cancel", 0, 5, nullptr);
+        progress.setWindowTitle(kPluginName);
+        progress.setWindowModality(Qt::WindowModal);
+        progress.setMinimumDuration(0);
+        progress.setValue(0);
+        progress.show();
+        QCoreApplication::processEvents();
+
+        // Step 0: Query Remix for selection details.
         QString err;
         RemixSelectionDetails details;
         if (!GetSelectedRemixAssetDetails(details, err)) {
-            QMessageBox::warning(nullptr, "InstaMAT2Remix", "Pull from Remix failed:\n\n" + err);
+            progress.close();
+            QMessageBox::warning(nullptr, kPluginName, "Pull from Remix failed:\n\n" + err);
             return;
         }
+
+        if (progress.wasCanceled()) return;
 
         if (!QAccessible::isActive()) {
             m_logger.Warning("Qt accessibility is disabled. Auto-create requires QT_ACCESSIBILITY=1 before launching InstaMAT.");
@@ -3190,13 +3261,13 @@ namespace InstaMAT2Remix {
         if (meshMode == PullMeshMode::SelectedMesh) useTilingMesh = false;
         else if (meshMode == PullMeshMode::TilingMesh) useTilingMesh = true;
 
-        // If the tiling mesh path is relative, interpret it relative to this plugin dir (common when copied between machines).
+        // If the tiling mesh path is relative, interpret it relative to this plugin dir.
         if (useTilingMesh && !tilingMeshPath.isEmpty() && !QDir::isAbsolutePath(tilingMeshPath)) {
             const QString abs = QDir(GetPluginDirPath()).filePath(tilingMeshPath);
             if (QFileInfo::exists(abs)) tilingMeshPath = QDir::cleanPath(abs);
         }
 
-        // If tiling mesh is requested but not configured, fall back to the built-in tiling plane (if present).
+        // If tiling mesh is requested but not configured, fall back to the built-in tiling plane.
         if (useTilingMesh && (tilingMeshPath.isEmpty() || !QFileInfo::exists(tilingMeshPath))) {
             const QString fallback = DetectDefaultTilingMeshPath();
             if (!fallback.isEmpty()) tilingMeshPath = fallback;
@@ -3209,7 +3280,8 @@ namespace InstaMAT2Remix {
             const QString ctxDir = QFileInfo(ctxFile).dir().absolutePath();
             meshAbs = QDir::cleanPath(QDir(ctxDir).filePath(meshPathRaw));
         } else {
-            QMessageBox::warning(nullptr, "InstaMAT2Remix", "Mesh path is relative, but no absolute context file was provided by Remix.");
+            progress.close();
+            QMessageBox::warning(nullptr, kPluginName, "Mesh path is relative, but no absolute context file was provided by Remix.");
             return;
         }
 
@@ -3217,8 +3289,8 @@ namespace InstaMAT2Remix {
             if (!tilingMeshPath.isEmpty() && QFileInfo::exists(tilingMeshPath)) {
                 meshAbs = QDir::cleanPath(tilingMeshPath);
             } else {
-                QMessageBox::warning(nullptr,
-                                     "InstaMAT2Remix",
+                progress.close();
+                QMessageBox::warning(nullptr, kPluginName,
                                      "Tiling mesh is enabled, but no valid tiling mesh path is configured.\n\n"
                                      "Set 'Tiling Mesh Path' in Settings, or ensure the plugin ships its default tiling mesh.");
                 return;
@@ -3226,12 +3298,22 @@ namespace InstaMAT2Remix {
         }
 
         if (!QFileInfo::exists(meshAbs)) {
-            QMessageBox::warning(nullptr, "InstaMAT2Remix", "Mesh file does not exist locally:\n\n" + meshAbs);
+            progress.close();
+            QMessageBox::warning(nullptr, kPluginName, "Mesh file does not exist locally:\n\n" + meshAbs);
             return;
         }
 
+        // Step 1: Auto-unwrap with Blender (if enabled).
+        if (progress.wasCanceled()) return;
+        progress.setLabelText("Preparing mesh...");
+        progress.setValue(1);
+        QCoreApplication::processEvents();
+
         QString finalMesh = meshAbs;
         if (autoUnwrap && !useTilingMesh && !m_tools.GetBlenderExecutable().empty()) {
+            progress.setLabelText("Auto-unwrapping mesh with Blender...");
+            QCoreApplication::processEvents();
+
             ExternalTools::UnwrapParams params;
             {
                 params.angleLimit = settings.value("BlenderSmartUVAngleLimit", 66.0).toDouble();
@@ -3244,11 +3326,11 @@ namespace InstaMAT2Remix {
             if (m_tools.RunAutoUnwrap(meshAbs.toStdString(), unwrapped, params)) {
                 finalMesh = QString::fromStdString(unwrapped);
             } else {
-                qWarning() << "[InstaMAT2Remix] Auto-unwrap failed, using original mesh.";
+                m_logger.Warning("Auto-unwrap failed, using original mesh.");
             }
         }
 
-        // Cache link state
+        // Cache link state.
         m_linkedMaterialPrim = materialPrim.toStdString();
         m_linkedMeshPath = finalMesh.toStdString();
         settings.setValue("LinkedMaterialPrim", materialPrim);
@@ -3259,22 +3341,12 @@ namespace InstaMAT2Remix {
 
         if (QGuiApplication::clipboard()) QGuiApplication::clipboard()->setText(finalMesh);
 
-        // ---------------------------------------------------------------------------
-        // Automatically create an Asset Texturing project using the pulled mesh.
-        //
-        // The project name is always "Remix" so that repeated pulls overwrite the
-        // same project slot instead of cluttering the user's project folder.
-        //
-        // We use TryCreateTexturingProjectFromMesh(), which handles the InstaMAT
-        // New Project dialog via QTimer::singleShot inside QDialog::exec()'s
-        // nested event loop (as recommended by the InstaMAT dev team).
-        //
-        // The automation sets:
-        //   Name:     Remix
-        //   Category: Materials/Assets
-        //   Type:     Multi-Material
-        //   Mesh:     <pulled asset from Remix>
-        // ---------------------------------------------------------------------------
+        // Step 2: Auto-create Asset Texturing project.
+        if (progress.wasCanceled()) return;
+        progress.setLabelText("Creating texturing project...");
+        progress.setValue(2);
+        QCoreApplication::processEvents();
+
         {
             const QString suggestedName = "Remix";
             QString autoCreateErr;
@@ -3282,8 +3354,8 @@ namespace InstaMAT2Remix {
 
             if (!created) {
                 m_logger.Warning(QString("Auto-create project failed: %1").arg(autoCreateErr));
-                QMessageBox::warning(nullptr,
-                                     kPluginName,
+                progress.close();
+                QMessageBox::warning(nullptr, kPluginName,
                                      QString("Failed to automatically create project.\n\n%1\n\n"
                                              "The mesh path has been copied to your clipboard.\n"
                                              "You can manually create a new Asset Texturing project and paste the mesh path.")
@@ -3292,24 +3364,56 @@ namespace InstaMAT2Remix {
             }
 
             m_logger.Info("Auto-create project succeeded.");
-
-            QMessageBox::information(nullptr,
-                                     kPluginName,
-                                     QString("✓ Project created and linked to RTX Remix.\n\n"
-                                             "Mesh: %1\n"
-                                             "Material: %2\n\n"
-                                             "Use 'Import Textures from Remix' to pull existing textures,\n"
-                                             "or start painting and 'Push to Remix' when ready.")
-                                         .arg(QFileInfo(finalMesh).fileName())
-                                         .arg(materialPrim));
         }
 
+        // Step 3: Template auto-run (if configured).
+        if (progress.wasCanceled()) return;
+        bool templateRan = false;
+        if (settings.value(kKeyTemplateAutoRunOnPull, false).toBool()) {
+            progress.setLabelText("Running template graph...");
+            progress.setValue(3);
+            QCoreApplication::processEvents();
+
+            QString templateMsg, templateErr;
+            if (RunTemplateGraphForMesh(finalMesh, templateMsg, templateErr)) {
+                m_logger.Info("Template auto-run succeeded: " + templateMsg);
+                templateRan = true;
+            } else {
+                m_logger.Warning("Template auto-run failed: " + templateErr);
+            }
+        }
+
+        // Step 4: Auto-import textures (if enabled).
+        if (progress.wasCanceled()) return;
+        bool texturesImported = false;
         if (autoImportAfterPull) {
-             ImportTexturesFromRemix();
+            progress.setLabelText("Importing textures from RTX Remix...");
+            progress.setValue(4);
+            QCoreApplication::processEvents();
+
+            // Close our progress before ImportTexturesFromRemix shows its own.
+            progress.close();
+            texturesImported = ImportTexturesFromRemix();
         }
+
+        // Step 5: Summary.
+        if (!progress.isHidden()) {
+            progress.setValue(5);
+            progress.close();
+        }
+
+        QStringList summary;
+        summary << QString("Project created and linked to RTX Remix.");
+        summary << QString("\nMesh: %1").arg(QFileInfo(finalMesh).fileName());
+        summary << QString("Material: %1").arg(materialPrim);
+        if (templateRan) summary << "\nTemplate graph executed.";
+        if (texturesImported) summary << "Textures imported.";
+        summary << "\nUse 'Push to Remix' when ready to export.";
+
+        QMessageBox::information(nullptr, kPluginName, summary.join("\n"));
     }
 
-    void RemixConnector::ImportTexturesFromRemix() {
+    bool RemixConnector::ImportTexturesFromRemix() {
         QSettings settings("InstaMAT2Remix", "Config");
 
         QString materialPrim = settings.value("LinkedMaterialPrim", "").toString();
@@ -3317,7 +3421,7 @@ namespace InstaMAT2Remix {
             QString selErr;
             if (!GetSelectedMaterialPrim(materialPrim, selErr)) {
                 QMessageBox::warning(nullptr, "InstaMAT2Remix", "Import Textures failed:\n\nNo linked material and selection query failed:\n" + selErr);
-                return;
+                return false;
             }
             settings.setValue("LinkedMaterialPrim", materialPrim);
             m_linkedMaterialPrim = materialPrim.toStdString();
@@ -3327,7 +3431,7 @@ namespace InstaMAT2Remix {
         QString dirErr;
         if (!GetRemixDefaultDirectory(remixDirAbs, dirErr)) {
             QMessageBox::warning(nullptr, "InstaMAT2Remix", "Import Textures failed:\n\nCould not determine Remix project directory:\n" + dirErr);
-            return;
+            return false;
         }
 
         const QString destDir = GetPulledTexturesDir(remixDirAbs);
@@ -3337,13 +3441,13 @@ namespace InstaMAT2Remix {
         const QJsonDocument doc = RequestJson("GET", QString("/stagecraft/assets/%1/textures").arg(encodedMat), {}, nullptr, &apiErr);
         if (doc.isNull() || !doc.isObject()) {
             QMessageBox::warning(nullptr, "InstaMAT2Remix", "Import Textures failed:\n\n" + apiErr);
-            return;
+            return false;
         }
 
         const QJsonArray textures = doc.object().value("textures").toArray();
         if (textures.isEmpty()) {
             QMessageBox::information(nullptr, "InstaMAT2Remix", "No textures were returned for the material:\n\n" + materialPrim);
-            return;
+            return false;
         }
 
         QProgressDialog progress("Importing textures from RTX Remix...", "Cancel", 0, textures.size(), nullptr);
@@ -3403,7 +3507,7 @@ namespace InstaMAT2Remix {
 
         if (progress.wasCanceled()) {
             QMessageBox::information(nullptr, "InstaMAT2Remix", "Import cancelled.");
-            return;
+            return false;
         }
 
         QMessageBox::information(nullptr,
@@ -3412,6 +3516,7 @@ namespace InstaMAT2Remix {
                                      .arg(pulledCount)
                                      .arg(convertedCount)
                                      .arg(destDir));
+        return pulledCount > 0;
     }
 
     void RemixConnector::PushToRemix(bool forceDialog) {
@@ -3495,6 +3600,9 @@ namespace InstaMAT2Remix {
             }
 
             if (candidates.isEmpty()) return {};
+
+            // Auto-select if only one candidate (matching Substance2Remix behavior).
+            if (candidates.size() == 1) return candidates[0].id;
 
             QStringList items;
             items.reserve(candidates.size());

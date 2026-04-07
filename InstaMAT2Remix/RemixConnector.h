@@ -34,8 +34,9 @@ namespace InstaMAT2Remix {
 
         // UI actions
         void PullFromRemix(bool autoUnwrap, PullMeshMode meshMode = PullMeshMode::UseSettings);
-        void ImportTexturesFromRemix();
+        bool ImportTexturesFromRemix();
         void PushToRemix(bool forceDialog);
+        void RelinkMaterial();
 
         // Template graph runner (PBR template with exposed mesh path input).
         bool RunTemplateGraphForMesh(const QString& meshPath, QString& outMessage, QString& outError);
