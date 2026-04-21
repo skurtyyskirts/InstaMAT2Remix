@@ -50,6 +50,7 @@
 #include <QSysInfo>
 #include <QKeyEvent>
 #include <QWindow>
+#include <functional>
 // NOTE: We intentionally avoid linking against QtQuick/QML headers here.
 // Including them would add Qt6Quick.dll / Qt6Qml.dll as hard load-time dependencies,
 // breaking plugin loading when InstaMAT extracts the DLL to a temp directory.
@@ -1443,10 +1444,10 @@ namespace InstaMAT2Remix {
             if (!root) return nullptr;
             if (predicate(root)) return root;
             
-            // QObject::findChildren searches recursively
-            auto list = root->findChildren<QObject*>();
-            for (QObject* obj : list) {
-                if (predicate(obj)) return obj;
+            for (QObject* child : root->children()) {
+                if (QObject* found = FindQmlItemRecursive(child, predicate)) {
+                    return found;
+                }
             }
             return nullptr;
         }
@@ -1537,30 +1538,19 @@ namespace InstaMAT2Remix {
         QObject* FindQObjectWithTextGlobal(const QString& needle, bool exact = false) {
             QSet<QObject*> visited;
 
-            auto search = [&](QObject* root) -> QObject* {
+            std::function<QObject*(QObject*)> search = [&](QObject* root) -> QObject* {
                 if (!root || visited.contains(root)) return nullptr;
                 visited.insert(root);
 
-                // Check root itself
-                {
-                    const QString t = root->property("text").toString();
-                    if (!t.isEmpty()) {
-                        if (exact ? t.compare(needle, Qt::CaseInsensitive) == 0
-                                  : t.contains(needle, Qt::CaseInsensitive))
-                            return root;
-                    }
-                }
-
-                // Search all descendants
-                const auto children = root->findChildren<QObject*>();
-                for (QObject* obj : children) {
-                    if (visited.contains(obj)) continue;
-                    visited.insert(obj);
-                    const QString t = obj->property("text").toString();
-                    if (t.isEmpty()) continue;
+                const QString t = root->property("text").toString();
+                if (!t.isEmpty()) {
                     if (exact ? t.compare(needle, Qt::CaseInsensitive) == 0
                               : t.contains(needle, Qt::CaseInsensitive))
-                        return obj;
+                        return root;
+                }
+
+                for (QObject* child : root->children()) {
+                    if (QObject* found = search(child)) return found;
                 }
                 return nullptr;
             };
@@ -1603,17 +1593,19 @@ namespace InstaMAT2Remix {
         QObject* FindQObjectWithPropertyGlobal(const char* propName, const QString& needle, bool exact = false) {
             QSet<QObject*> visited;
 
-            auto search = [&](QObject* root) -> QObject* {
-                if (!root) return nullptr;
-                const auto children = root->findChildren<QObject*>();
-                for (QObject* obj : children) {
-                    if (visited.contains(obj)) continue;
-                    visited.insert(obj);
-                    const QString t = obj->property(propName).toString();
-                    if (t.isEmpty()) continue;
+            std::function<QObject*(QObject*)> search = [&](QObject* root) -> QObject* {
+                if (!root || visited.contains(root)) return nullptr;
+                visited.insert(root);
+
+                const QString t = root->property(propName).toString();
+                if (!t.isEmpty()) {
                     if (exact ? t.compare(needle, Qt::CaseInsensitive) == 0
                               : t.contains(needle, Qt::CaseInsensitive))
-                        return obj;
+                        return root;
+                }
+
+                for (QObject* child : root->children()) {
+                    if (QObject* found = search(child)) return found;
                 }
                 return nullptr;
             };
