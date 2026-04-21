@@ -2,7 +2,6 @@ import ctypes
 import os
 import sys
 import webbrowser
-from typing import Optional
 
 # -----------------------------------------------------------------------------
 # IMPORTANT: This file is installed into InstaMAT Studio's startup scripts folder.
@@ -73,7 +72,7 @@ def _trace(msg: str) -> None:
         pass
 
 
-def _get_main_window() -> Optional[QMainWindow]:
+def _get_main_window() -> QMainWindow | None:
     if not QT_AVAILABLE or QApplication is None:
         return None
     app = QApplication.instance()
@@ -153,7 +152,7 @@ class RemixConnector:
             _trace(f"RemixConnector.__init__ FAILED: {e}")
             raise
 
-        self.remix_menu: Optional[QMenu] = None
+        self.remix_menu: QMenu | None = None
 
     # --- Menu actions ---
 
@@ -306,10 +305,10 @@ class RemixConnector:
             self.remix_menu = None
 
 
-g_connector: Optional[RemixConnector] = None
+g_connector: RemixConnector | None = None
 
 
-def on_startup(plugin_path: str = None):
+def on_startup(plugin_path: str | None = None):
     """
     Called by InstaMAT Studio at startup (startup scripts folder).
     """
