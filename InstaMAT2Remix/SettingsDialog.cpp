@@ -131,7 +131,7 @@ void SettingsDialog::buildUi() {
         auto* layout = new QFormLayout(w);
 
         m_apiBaseUrl = new QLineEdit(w);
-        m_apiBaseUrl->setPlaceholderText("http://localhost:8011");
+        m_apiBaseUrl->setPlaceholderText(kDefaultApiBaseUrl);
         layout->addRow("API Base URL", m_apiBaseUrl);
 
         m_pollTimeout = new QDoubleSpinBox(w);
@@ -325,7 +325,7 @@ void SettingsDialog::buildUi() {
 void SettingsDialog::loadFromSettings() {
     QSettings s(kSettingsOrg, kSettingsApp);
 
-    m_apiBaseUrl->setText(s.value(kKeyApiBaseUrl, "http://localhost:8011").toString());
+    m_apiBaseUrl->setText(s.value(kKeyApiBaseUrl, kDefaultApiBaseUrl).toString());
     m_pollTimeout->setValue(s.value(kKeyPollTimeoutSec, 60.0).toDouble());
 
     m_blenderPath->setText(s.value(kKeyBlenderPath, "").toString());
@@ -394,7 +394,7 @@ void SettingsDialog::writeToSettings() {
 }
 
 void SettingsDialog::applyDefaultsToUi() {
-    m_apiBaseUrl->setText("http://localhost:8011");
+    m_apiBaseUrl->setText(kDefaultApiBaseUrl);
     m_pollTimeout->setValue(60.0);
     m_logLevel->setCurrentText("info");
 
@@ -485,6 +485,19 @@ void SettingsDialog::onResetDefaults() {
 }
 
 void SettingsDialog::onAccept() {
+    const QUrl url(m_apiBaseUrl->text().trimmed());
+    if (url.scheme().compare("http", Qt::CaseInsensitive) == 0) {
+        const QString host = url.host().toLower();
+        if (host != "localhost" && host != "127.0.0.1") {
+            const auto result = QMessageBox::warning(this, "Security Warning",
+                "You are using an unencrypted HTTP connection to a remote API host.\n\n"
+                "This can expose sensitive data and is not recommended. Use HTTPS instead if the remote host supports it.\n\n"
+                "Do you want to proceed anyway?",
+                QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+            if (result != QMessageBox::Yes) return;
+        }
+    }
+
     writeToSettings();
     if (m_connector) m_connector->ReloadSettings();
     accept();

@@ -4,7 +4,7 @@
 
 ### Prerequisites
 ✅ InstaMAT Studio is installed
-✅ RTX Remix Toolkit is running (default: http://localhost:8011)
+✅ RTX Remix Toolkit is running (default: http://localhost:8011). **Security recommendation**: Use HTTPS for remote connections.
 ✅ A Remix project is open with capturedselectable meshes
 
 ### Step-by-Step Test

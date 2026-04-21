@@ -35,7 +35,7 @@
 2. **Push** InstaMAT-generated PBR textures back into RTX Remix materials
 3. Achieve a workflow equivalent to the existing **Substance2Remix** plugin (Substance Painter <-> RTX Remix)
 
-The plugin communicates with RTX Remix via its **REST API** (default `http://localhost:8011`) and uses the **InstaMAT Plugin SDK** (C++ DLL with Qt 6).
+The plugin communicates with RTX Remix via its **REST API** (default `http://localhost:8011`) and uses the **InstaMAT Plugin SDK** (C++ DLL with Qt 6). **Security Note:** For remote API connections, using `https://` is strongly recommended.
 
 ---
 
@@ -99,7 +99,7 @@ When you click **"Pull from Remix"** in Substance2Remix, it automatically:
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│ NVIDIA RTX Remix Toolkit (http://localhost:8011)                │
+│ NVIDIA RTX Remix Toolkit (http://localhost:8011 or https://)    │
 │                                                                 │
 │  /stagecraft/assets/?selection=true    - Get selected mesh      │
 │  /stagecraft/assets/?asset_hashes=...  - Get material from mesh │
@@ -494,7 +494,7 @@ The script automatically:
 | Component | Required | Notes |
 |---|---|---|
 | InstaMAT Studio | Yes | With Plugin SDK support |
-| RTX Remix Toolkit | Yes | Running with REST service on `http://localhost:8011` |
+| RTX Remix Toolkit | Yes | Running with REST service on `http://localhost:8011` (Default) |
 | Qt 6.5.3 or 6.6.3 | Yes (build only) | MSVC 64-bit. Must match InstaMAT's Qt version |
 | Visual Studio 2022 | Yes (build only) | C++ Desktop development workload |
 | CMake 3.16+ | Yes (build only) | |
