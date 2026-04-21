@@ -4,3 +4,6 @@
 /InstaMAT2Remix.zip
 /Substance2Remix
 /texconv.exe
+
+__pycache__/
+*.pyc
