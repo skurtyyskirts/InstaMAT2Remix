@@ -3689,19 +3689,28 @@ namespace InstaMAT2Remix {
             QString pbrType;
             QStringList names;
         };
-        const QList<OutputMatch> outputMatches = {
-            {"albedo", {"Albedo", "BaseColor", "Base Color", "Diffuse"}},
-            {"normal", {"Normal", "NormalDX", "Normal DX", "NormalMap"}},
-            {"roughness", {"Roughness"}},
-            {"metallic", {"Metallic", "Metalness"}},
-            {"emissive", {"Emissive", "Emission"}},
-            {"height", {"Height", "Displacement"}},
-            {"opacity", {"Opacity", "Alpha"}},
-            {"ao", {"Ambient Occlusion", "AO", "Occlusion"}},
-            {"transmittance", {"Transmittance", "Transmission"}},
-            {"ior", {"IOR", "Refraction", "Index of Refraction"}},
-            {"subsurface", {"Subsurface", "SSS", "Subsurface Scattering"}},
-        };
+        static const QHash<QString, QString> normalizedCandidateToPbrType = [] {
+            QHash<QString, QString> map;
+            const QList<OutputMatch> outputMatches = {
+                {"albedo", {"Albedo", "BaseColor", "Base Color", "Diffuse"}},
+                {"normal", {"Normal", "NormalDX", "Normal DX", "NormalMap"}},
+                {"roughness", {"Roughness"}},
+                {"metallic", {"Metallic", "Metalness"}},
+                {"emissive", {"Emissive", "Emission"}},
+                {"height", {"Height", "Displacement"}},
+                {"opacity", {"Opacity", "Alpha"}},
+                {"ao", {"Ambient Occlusion", "AO", "Occlusion"}},
+                {"transmittance", {"Transmittance", "Transmission"}},
+                {"ior", {"IOR", "Refraction", "Index of Refraction"}},
+                {"subsurface", {"Subsurface", "SSS", "Subsurface Scattering"}},
+            };
+            for (const auto& m : outputMatches) {
+                for (const QString& candidate : m.names) {
+                    map.insert(NormalizeSpacesUnderscoresLower(candidate), m.pbrType);
+                }
+            }
+            return map;
+        }();
 
         QHash<QString, const InstaMAT::IGraphVariable*> outputs;
         const InstaMAT::uint32 outCount = instance->GetParameterCount(InstaMAT::IGraph::ParameterTypeOutput);
@@ -3718,13 +3727,10 @@ namespace InstaMAT2Remix {
             const QString rawName = vo ? QString::fromUtf8(vo->GetName(true)) : QString();
             const QString normName = NormalizeSpacesUnderscoresLower(rawName);
 
-            for (const auto& m : outputMatches) {
-                if (outputs.contains(m.pbrType)) continue;
-                for (const QString& candidate : m.names) {
-                    if (normName == NormalizeSpacesUnderscoresLower(candidate)) {
-                        outputs.insert(m.pbrType, v);
-                        break;
-                    }
+            auto pbrIt = normalizedCandidateToPbrType.constFind(normName);
+            if (pbrIt != normalizedCandidateToPbrType.constEnd()) {
+                if (!outputs.contains(pbrIt.value())) {
+                    outputs.insert(pbrIt.value(), v);
                 }
             }
         }
