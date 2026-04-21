@@ -8,6 +8,8 @@
 #include <QProcess>
 #include <QEventLoop>
 #include <QTimer>
+#include <QTemporaryDir>
+#include <QUuid>
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -114,8 +116,12 @@ if __name__ == "__main__":
     bool ExternalTools::RunAutoUnwrap(const std::string& inputMeshPath, std::string& outputMeshPath, const UnwrapParams& params) {
         if (m_blenderPath.empty()) return false;
 
-        QString tempDir = QDir::tempPath();
-        QString scriptPath = tempDir + "/remix_unwrap.py";
+        // Use a unique temporary workspace for this unwrap task.
+        QTemporaryDir workDir;
+        if (!workDir.isValid()) return false;
+        workDir.setAutoRemove(false); // We want the mesh to persist for InstaMAT to load.
+
+        const QString scriptPath = workDir.filePath("remix_unwrap.py");
         
         QFile scriptFile(scriptPath);
         if (scriptFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
@@ -126,31 +132,41 @@ if __name__ == "__main__":
 
         QFileInfo inputInfo(QString::fromStdString(inputMeshPath));
         QString baseName = inputInfo.baseName();
-        outputMeshPath = (tempDir + "/" + baseName + "_unwrapped.obj").toStdString();
+        // Give the output a unique name to further avoid collisions in the shared temp directory.
+        const QString outMeshName = baseName + "_" + QUuid::createUuid().toString(QUuid::Id128) + "_unwrapped.obj";
+        const QString outMeshPath = workDir.filePath(outMeshName);
+        outputMeshPath = outMeshPath.toStdString();
 
         // blender.exe -b -P script.py -- <input> <output>
         QStringList args;
-        args << "-b" << "-P" << scriptPath << "--" << QString::fromStdString(inputMeshPath) << QString::fromStdString(outputMeshPath)
+        args << "-b" << "-P" << scriptPath << "--" << QString::fromStdString(inputMeshPath) << outMeshPath
              << "--angle_limit" << QString::number(params.angleLimit, 'f', 3)
              << "--island_margin" << QString::number(params.islandMargin, 'f', 6)
              << "--area_weight" << QString::number(params.areaWeight, 'f', 6)
              << "--stretch_to_bounds" << (params.stretchToBounds ? "True" : "False");
         
-        return RunProcess(QString::fromStdString(m_blenderPath), args, 30 * 60 * 1000);
+        const bool ok = RunProcess(QString::fromStdString(m_blenderPath), args, 30 * 60 * 1000);
+
+        // Cleanup the script; keep the directory and mesh (auto-remove was disabled).
+        QFile::remove(scriptPath);
+
+        return ok;
     }
 
     bool ExternalTools::ConvertToDDS(const std::string& inputPngPath, const std::string& outputDdsPath, bool isNormalMap) {
         if (m_texconvPath.empty()) return false;
 
         const QFileInfo outInfo(QString::fromStdString(outputDdsPath));
-        const QString outDir = outInfo.absolutePath();
+        const QString finalOutDir = outInfo.absolutePath();
         const QString desiredBase = outInfo.completeBaseName(); // without extension(s)
 
-        QDir().mkpath(outDir);
+        // Use a unique temporary workspace for the conversion to avoid predictable paths
+        // in potentially shared locations.
+        QTemporaryDir workDir;
+        if (!workDir.isValid()) return false;
 
         // texconv names output based on input filename, so ensure the input basename matches desired output.
-        const QString tempInputPath = outDir + "/" + desiredBase + ".png";
-        QFile::remove(tempInputPath);
+        const QString tempInputPath = workDir.filePath(desiredBase + ".png");
         if (!QFile::copy(QString::fromStdString(inputPngPath), tempInputPath)) {
             qWarning() << "Failed to stage PNG for texconv:" << tempInputPath;
             return false;
@@ -163,18 +179,21 @@ if __name__ == "__main__":
         args << "-ft" << "dds"
              << "-f" << format
              << "-y" << "-nologo"
-             << "-o" << outDir
+             << "-o" << workDir.path()
              << tempInputPath;
 
         const bool ok = RunProcess(QString::fromStdString(m_texconvPath), args);
 
-        // Cleanup temp staged input
-        QFile::remove(tempInputPath);
-
-        // Verify expected output exists
-        const QString expectedDds = outDir + "/" + desiredBase + ".dds";
-        if (ok && QFileInfo::exists(expectedDds)) {
-            return true;
+        // Verify expected output exists in our unique workDir
+        const QString tempDds = workDir.filePath(desiredBase + ".dds");
+        if (ok && QFileInfo::exists(tempDds)) {
+            QDir().mkpath(finalOutDir);
+            QFile::remove(QString::fromStdString(outputDdsPath));
+            if (QFile::rename(tempDds, QString::fromStdString(outputDdsPath))) {
+                return true;
+            } else {
+                qWarning() << "Failed to move converted DDS to final destination:" << QString::fromStdString(outputDdsPath);
+            }
         }
 
         return false;
@@ -185,27 +204,40 @@ if __name__ == "__main__":
         const QString inPath = QString::fromStdString(inputDdsPath);
         if (!QFileInfo::exists(inPath)) return false;
 
-        const QString outDir = QString::fromStdString(outputDir);
-        QDir().mkpath(outDir);
+        const QString finalOutDir = QString::fromStdString(outputDir);
 
         // texconv replaces only the last extension:
         // "foo.dds" -> "foo.png"
         // "foo.rtex.dds" -> "foo.rtex.png"
         const QString baseName = QFileInfo(inPath).completeBaseName();
-        const QString expectedOut = outDir + "/" + baseName + ".png";
+
+        // Use a unique temporary workspace for the conversion to avoid predictable paths.
+        QTemporaryDir workDir;
+        if (!workDir.isValid()) return false;
 
         QStringList args;
         args << "-ft" << "png"
-             << "-o" << outDir
+             << "-o" << workDir.path()
              << "-y" << "-nologo"
              << inPath;
 
         const bool ok = RunProcess(QString::fromStdString(m_texconvPath), args);
         if (!ok) return false;
 
-        if (!QFileInfo::exists(expectedOut)) return false;
-        outputPngPath = expectedOut.toStdString();
-        return true;
+        const QString tempPng = workDir.filePath(baseName + ".png");
+        if (!QFileInfo::exists(tempPng)) return false;
+
+        const QString finalOutPath = QDir(finalOutDir).filePath(baseName + ".png");
+        QDir().mkpath(finalOutDir);
+        QFile::remove(finalOutPath);
+        if (QFile::rename(tempPng, finalOutPath)) {
+            outputPngPath = finalOutPath.toStdString();
+            return true;
+        } else {
+            qWarning() << "Failed to move converted PNG to final destination:" << finalOutPath;
+        }
+
+        return false;
     }
 
     bool ExternalTools::RunProcess(const QString& program, const QStringList& args, int timeoutMs) {
