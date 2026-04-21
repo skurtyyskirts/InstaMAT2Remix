@@ -2612,8 +2612,8 @@ namespace InstaMAT2Remix {
     void RemixConnector::ReloadSettings() {
         QSettings settings("InstaMAT2Remix", "Config");
 
-        const QString baseUrl = settings.value("RemixApiBaseUrl", "http://localhost:8011").toString().trimmed();
-        m_remixApiBaseUrl = (baseUrl.isEmpty() ? "http://localhost:8011" : baseUrl).toStdString();
+        const QString baseUrl = settings.value("RemixApiBaseUrl", kDefaultApiBaseUrl).toString().trimmed();
+        m_remixApiBaseUrl = (baseUrl.isEmpty() ? kDefaultApiBaseUrl : baseUrl).toStdString();
 
         m_linkedMaterialPrim = settings.value("LinkedMaterialPrim", "").toString().toStdString();
         m_linkedMeshPath = settings.value("LinkedMeshPath", "").toString().toStdString();
@@ -2669,7 +2669,7 @@ namespace InstaMAT2Remix {
         lines << QString("Log File: %1").arg(GetLogFilePath());
         lines << "";
         lines << "=== Settings ===";
-        lines << QString("API Base URL: %1").arg(settings.value("RemixApiBaseUrl", "http://localhost:8011").toString());
+        lines << QString("API Base URL: %1").arg(settings.value("RemixApiBaseUrl", kDefaultApiBaseUrl).toString());
         lines << QString("Poll Timeout (sec): %1").arg(settings.value("PollTimeoutSec", 60.0).toDouble());
         lines << QString("Log Level: %1").arg(settings.value("LogLevel", "info").toString());
         lines << QString("Remix Output Subfolder: %1").arg(settings.value("RemixOutputSubfolder", "Textures/InstaMAT2Remix_Ingested").toString());
@@ -2713,7 +2713,7 @@ namespace InstaMAT2Remix {
         if (outError) outError->clear();
 
         QString base = QString::fromStdString(m_remixApiBaseUrl).trimmed();
-        if (base.isEmpty()) base = "http://localhost:8011";
+        if (base.isEmpty()) base = kDefaultApiBaseUrl;
         while (base.endsWith('/')) base.chop(1);
 
         const QString ep = endpoint.startsWith('/') ? endpoint.mid(1) : endpoint;
