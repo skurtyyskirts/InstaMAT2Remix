@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Usage & troubleshooting
+    url: https://github.com/skurtyyskirts/InstaMAT2Remix#troubleshooting
+    about: Check the README troubleshooting section and known limitations first.

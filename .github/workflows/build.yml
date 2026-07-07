@@ -1,0 +1,70 @@
+name: Build InstaMAT2Remix Plugin
+
+on:
+  push:
+    branches: [main, "claude/**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    name: Build C++/CMake/Qt6 Plugin (MSVC x64)
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Qt 6.6
+        uses: jurplel/install-qt-action@v3
+        with:
+          version: "6.6.3"
+          host: windows
+          target: desktop
+          arch: win64_msvc2019_64
+          modules: qtwebsockets
+          dir: C:\Qt
+          cache: true
+
+      - name: Setup MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Build plugin
+        working-directory: InstaMAT2Remix
+        shell: pwsh
+        run: |
+          # build_plugin.ps1 discovers Qt at C:\Qt (set via dir: above)
+          .\build_plugin.ps1
+
+      - name: Run C++ tests
+        working-directory: InstaMAT2Remix
+        shell: pwsh
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Upload built DLL
+        uses: actions/upload-artifact@v4
+        with:
+          name: InstaMAT2Remix-plugin
+          path: InstaMAT2Remix/build/Release/*.dll
+          if-no-files-found: warn
+
+  test-python:
+    runs-on: ubuntu-latest
+    name: Python connector tests
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install pytest requests
+
+      - name: Run tests
+        run: python -m pytest InstaMAT2Remix/tests/ -v

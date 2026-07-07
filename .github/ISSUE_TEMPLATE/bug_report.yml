@@ -1,0 +1,71 @@
+name: Bug report
+description: Report a problem with the RTX Remix Connector (InstaMAT2Remix) plugin
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a report! The two most useful things you can attach
+        are the **Diagnostics** output and a **log excerpt** — the fields below
+        prompt for them.
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: A clear description of the problem and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. In Remix, select …
+        2. RTX Remix Connector > …
+        3. …
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics output
+      description: "Paste from **RTX Remix Connector > Diagnostics… > Copy to Clipboard**."
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log excerpt
+      description: "Relevant lines from `Documents\\InstaMAT2Remix\\logs\\remix_connector.log` (the `ExportWorker:` / `Recipe:` lines are most useful)."
+      render: text
+    validations:
+      required: false
+  - type: input
+    id: studio-version
+    attributes:
+      label: InstaMAT Studio version
+    validations:
+      required: true
+  - type: input
+    id: remix-version
+    attributes:
+      label: RTX Remix Toolkit version
+    validations:
+      required: false
+  - type: input
+    id: windows-version
+    attributes:
+      label: Windows version
+      placeholder: "e.g. Windows 11 23H2"
+    validations:
+      required: false
+  - type: checkboxes
+    id: preconditions
+    attributes:
+      label: Preconditions
+      options:
+        - label: RTX Remix Toolkit was running with a project open and its REST API on http://localhost:8011
+          required: false
+        - label: InstaMAT Studio is activated/licensed
+          required: false

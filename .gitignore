@@ -1,0 +1,23 @@
+# Build outputs
+InstaMAT2Remix/build/
+InstaMAT2Remix/build_*/
+build_bench/
+build/
+
+# Release packaging output
+InstaMAT2Remix/dist/
+
+# Stray compiler/linker outputs in the source dir
+InstaMAT2Remix/InstaMAT2Remix.dll
+InstaMAT2Remix/InstaMAT2Remix.exp
+InstaMAT2Remix/InstaMAT2Remix.lib
+InstaMAT2Remix/InstaMAT2Remix.obj
+# The .IMP is generated at install/package time (tools/imp_packaging.ps1)
+InstaMAT2Remix/InstaMAT2Remix.IMP
+
+# Python
+__pycache__/
+*.pyc
+
+# Editor/workspace
+*.code-workspace
