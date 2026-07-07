@@ -38,6 +38,10 @@ separate helper process, so a Push can never crash Studio.
   ingestcraft pipeline, retargets the material, and saves the layer.
 - **Force Push to Remix** — relinks to whatever is selected in Remix now and
   writes under a fresh, non-overwriting filename root.
+- **Duplicate Material to Remix** — publishes your current paint as a brand
+  new, independent Remix material (fresh identity) without touching the
+  material you're linked to. Ingest runs async (submit + poll, no blind
+  wait) and also writes a local `.usda` sidecar next to the baked textures.
 - **Out-of-process render worker** (`InstaMAT2RemixExport.exe`) isolates
   rendering so it can never take down InstaMAT Studio.
 - Settings (5 tabs), a one-click **Diagnostics** health report with
@@ -76,6 +80,7 @@ plus a manual, no-script install path. To remove the plugin later, run
 | **Import Textures from Remix** | Downloads the linked material's textures (DDS→PNG, canonical names) into `Documents\InstaMAT2Remix\Pulled Textures\<project>\`, registers the folder, and opens Explorer. Drag each map onto the matching channel. |
 | **Push To Remix** | Auto-saves → renders PBR outputs at the baked resolution → ingests → retargets the linked material → saves the Remix layer. Renders out-of-process. |
 | **Force Push to Remix** | Like Push, but relinks to the currently selected Remix material and writes under a fresh, non-overwriting filename root. |
+| **Duplicate Material to Remix** | Renders your current paint and publishes it as a new, independent Remix material under a fresh identity (async ingest, `.usda` sidecar written locally). The material you're linked to is never modified. |
 | **Settings…** | Connection / Paths / Pull / Export / Advanced. |
 | **Diagnostics…** | One-click health report (versions, path checks, link state, live connectivity), Copy to Clipboard. |
 | **About…** | Plugin name, version, and repository link. |

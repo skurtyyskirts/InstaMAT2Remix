@@ -41,20 +41,31 @@
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QRegularExpression>
+#include <QSet>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QStringList>
+#include <QTextStream>
 #include <QThread>
 #include <QTimer>
 #include <QToolBar>
 #include <QToolButton>
 #include <QUrl>
 #include <QUrlQuery>
+#include <QUuid>
 #include <QProgressDialog>
 #include <QSysInfo>
 #include <QKeyEvent>
 #include <QWindow>
 #include <functional>
+
+// xxHash, vendored at vendor/xxhash.h (BSD 2-Clause; see THIRD_PARTY_LICENSES.md).
+// XXH_INLINE_ALL compiles the whole library as static-inline functions in this
+// translation unit only — no separate .c file or link step, and safe to do so
+// even though RemixConnector.cpp is compiled into both the plugin DLL and
+// TestRemixConnector (no external symbols are emitted to collide).
+#define XXH_INLINE_ALL
+#include "vendor/xxhash.h"
 // NOTE: We intentionally avoid linking against QtQuick/QML headers here.
 // Including them would add Qt6Quick.dll / Qt6Qml.dll as hard load-time dependencies,
 // breaking plugin loading when InstaMAT extracts the DLL to a temp directory.
@@ -138,6 +149,13 @@ namespace InstaMAT2Remix {
             {"opacity",                     "opacity"},
             {"transparency_texture",        "opacity"},
         };
+
+        // InstaMAT2Duplicate's channel set: the seven WBC-parity PBR types
+        // (Albedo/Normal/Roughness/Metallic/Emissive/Height/Opacity). Push
+        // additionally surfaces AO/transmittance/IOR/subsurface via
+        // kDefaultPbrSpecs; Duplicate intentionally does not.
+        const QSet<QString> kDuplicateChannels = {
+            "albedo", "normal", "roughness", "metallic", "emissive", "height", "opacity"};
 
         QString NormalizeSpacesUnderscoresLower(QString s) {
             s = s.toLower();
@@ -3224,6 +3242,557 @@ namespace InstaMAT2Remix {
                        "the GPU is busy with other graphics-heavy applications during "
                        "export. Close those apps and Push again for a clean render.";
         }
+        if (!ingestErrors.isEmpty()) {
+            summary += "\n\nIngest warnings:\n" + ingestErrors.join("\n");
+        }
+        QMessageBox::information(nullptr, kPluginName, summary);
+    }
+
+    // ============================================================================
+    // InstaMAT2Duplicate
+    // ============================================================================
+
+    // static
+    QString RemixConnector::GenerateMaterialHash() {
+        const QByteArray uuidBytes = QUuid::createUuid().toRfc4122(); // 16 random (v4) bytes
+        const XXH64_hash_t digest = XXH3_64bits(uuidBytes.constData(), size_t(uuidBytes.size()));
+        return QString::number(quint64(digest), 16).rightJustified(16, '0').toUpper();
+    }
+
+    // static
+    QString RemixConnector::BuildDuplicateUsdaSidecar(
+        const QString& materialPrimPath,
+        const QList<QPair<QString, QString>>& channels) {
+        const QString primName = materialPrimPath.section('/', -1);
+
+        QString usda;
+        QTextStream ts(&usda);
+        ts << "#usda 1.0\n"
+           << "(\n"
+           << "    customLayerData = {\n"
+           << "        string generator = \"InstaMAT2Duplicate\"\n"
+           << "    }\n"
+           << ")\n\n"
+           << "def Scope \"RootNode\"\n{\n"
+           << "    def Scope \"Looks\"\n    {\n"
+           << "        def Material \"" << primName << "\"\n        {\n"
+           << "            token outputs:mdl:displacement.connect = <"
+               << materialPrimPath << "/Shader.outputs:out>\n"
+           << "            token outputs:mdl:surface.connect = <"
+               << materialPrimPath << "/Shader.outputs:out>\n"
+           << "            token outputs:mdl:volume.connect = <"
+               << materialPrimPath << "/Shader.outputs:out>\n\n"
+           << "            def Shader \"Shader\"\n            {\n"
+           << "                uniform asset info:mdl:sourceAsset"
+              " = @AperturePBR_Translucency.mdl@\n"
+           << "                uniform token info:mdl:sourceAsset:subIdentifier"
+              " = \"AperturePBR_Translucency\"\n";
+
+        for (const auto& channel : channels) {
+            const QString& mdlInput = channel.first;
+            const QString& relPath  = channel.second;
+            const bool isSrgb = (mdlInput == "diffuse_texture" || mdlInput == "emissive_mask_texture");
+            ts << "                asset inputs:" << mdlInput << " = @" << relPath << "@";
+            if (isSrgb) {
+                ts << "\n"
+                   << "                (\n"
+                   << "                    colorSpace = \"sRGB\"\n"
+                   << "                )";
+            }
+            ts << "\n";
+        }
+
+        ts << "                token outputs:out\n"
+           << "            }\n"
+           << "        }\n"
+           << "    }\n"
+           << "}\n";
+        return usda;
+    }
+
+    // static
+    QJsonObject RemixConnector::BuildDuplicateValidatePayload(
+        const QString& jobName,
+        const QString& absTexturePath,
+        const QString& outDirApi,
+        const QString& validationType) {
+        auto addFlow = [](QJsonArray& arr, const QString& channel, bool pushInput, bool pushOutput) {
+            QJsonObject f;
+            f.insert("name", "InOutData");
+            if (pushInput)  f.insert("push_input_data",  true);
+            if (pushOutput) f.insert("push_output_data", true);
+            f.insert("channel", channel);
+            arr.append(f);
+        };
+
+        QJsonObject contextData;
+        contextData.insert("context_name", "ingestcraft_browser");
+        QJsonArray inputFiles;
+        QJsonArray inPair;
+        inPair.append(absTexturePath);
+        inPair.append(validationType);
+        inputFiles.append(inPair);
+        contextData.insert("input_files", inputFiles);
+        contextData.insert("output_directory", outDirApi);
+        contextData.insert("allow_empty_input_files_list", true);
+        QJsonArray ctxFlows;
+        addFlow(ctxFlows, "ingestion_output", false, true);
+        addFlow(ctxFlows, "cleanup_files",    false, true);
+        addFlow(ctxFlows, "write_metadata",   false, true);
+        contextData.insert("data_flows", ctxFlows);
+        contextData.insert("hide_context_ui", true);
+        contextData.insert("create_context_if_not_exist", true);
+        contextData.insert("expose_mass_ui", false);
+        contextData.insert("cook_mass_template", true);
+
+        QJsonArray checkFlows;
+        addFlow(checkFlows, "ingestion_output", true, true);
+        addFlow(checkFlows, "cleanup_files",    true, true);
+        addFlow(checkFlows, "write_metadata",   false, true);
+        QJsonObject checkData;
+        checkData.insert("data_flows", checkFlows);
+
+        QJsonArray selectors;
+        selectors.append(QJsonObject{{"name", "AllShaders"}, {"data", QJsonObject{}}});
+
+        QJsonObject check;
+        check.insert("name", "ConvertToDDS");
+        check.insert("selector_plugins", selectors);
+        check.insert("data", checkData);
+        check.insert("stop_if_fix_failed", true);
+        check.insert("context_plugin", QJsonObject{{"name", "CurrentStage"}, {"data", QJsonObject{}}});
+        QJsonArray checkPlugins;
+        checkPlugins.append(check);
+
+        QJsonArray resultors;
+        resultors.append(QJsonObject{
+            {"name", "FileCleanup"},
+            {"data", QJsonObject{{"channel", "cleanup_files"}, {"cleanup_output", false}}}});
+        resultors.append(QJsonObject{
+            {"name", "FileMetadataWritter"},
+            {"data", QJsonObject{{"channel", "write_metadata"}}}});
+
+        QJsonObject payload;
+        payload.insert("executor", 1);
+        payload.insert("name", jobName);
+        payload.insert("context_plugin",
+            QJsonObject{{"name", "TextureImporter"}, {"data", contextData}});
+        payload.insert("check_plugins", checkPlugins);
+        payload.insert("resultor_plugins", resultors);
+        return payload;
+    }
+
+    // static
+    QString RemixConnector::ExtractDuplicateIngestedPath(
+        const QJsonObject& schema, const QString& origBase) {
+        QStringList paths;
+        auto harvest = [&](const QJsonObject& plugin) {
+            const QJsonArray flows =
+                plugin.value("data").toObject().value("data_flows").toArray();
+            for (const QJsonValue& fv : flows) {
+                const QJsonObject fo = fv.toObject();
+                if (fo.value("channel").toString() != "ingestion_output") continue;
+                const QJsonArray outs = fo.value("output_data").toArray();
+                for (const QJsonValue& ov : outs)
+                    if (ov.isString()) paths << ov.toString();
+            }
+        };
+        harvest(schema.value("context_plugin").toObject());
+        const QJsonArray checks = schema.value("check_plugins").toArray();
+        for (const QJsonValue& cv : checks) harvest(cv.toObject());
+        const QJsonArray content = schema.value("content").toArray();
+        for (const QJsonValue& cv : content)
+            if (cv.isString()) paths << cv.toString();
+        paths.removeDuplicates();
+
+        const QString baseLower = origBase.toLower();
+        QString best;
+        for (const QString& p : paths) {
+            const QString pl = p.toLower();
+            if (!pl.endsWith(".dds") && !pl.endsWith(".rtex.dds")) continue;
+            if (!QFileInfo(pl).completeBaseName().contains(baseLower)) continue;
+            if (pl.endsWith(".rtex.dds")) return p; // prefer .rtex.dds
+            if (best.isEmpty()) best = p;
+        }
+        if (!best.isEmpty()) return best;
+        return paths.isEmpty() ? QString() : paths.first();
+    }
+
+    bool RemixConnector::DuplicateIngestChannelsAsync(
+        const QHash<QString, QString>& channelFiles,
+        const QString&                 targetIngestDirAbs,
+        QHash<QString, QString>&       outIngestedPaths,
+        QStringList&                   outErrors) const {
+        outIngestedPaths.clear();
+        outErrors.clear();
+        if (channelFiles.isEmpty()) return false;
+
+        QString base = QString::fromStdString(m_remixApiBaseUrl).trimmed();
+        if (base.isEmpty()) base = kDefaultApiBaseUrl;
+        while (base.endsWith('/')) base.chop(1);
+        const QUrl validateUrl(base + "/ingestcraft/mass-validator/validate");
+        const QString outDirApi = NormalizePathSlashes(QFileInfo(targetIngestDirAbs).absoluteFilePath());
+
+        struct SubmittedJob { QString pbrType; QString jobName; QString origBase; };
+        QList<SubmittedJob> submitted;
+
+        // ---- Step 5: POST /validate, at most kMaxDuplicateIngestWorkers in flight ----
+        const QStringList pbrKeys = channelFiles.keys();
+        for (int batchStart = 0; batchStart < pbrKeys.size(); batchStart += kMaxDuplicateIngestWorkers) {
+            const int batchEnd = qMin(batchStart + kMaxDuplicateIngestWorkers, pbrKeys.size());
+
+            struct BatchItem { QByteArray body; QString jobName; QString pbrType; QString origBase; };
+            QVector<BatchItem> items;
+            items.reserve(batchEnd - batchStart);
+            for (int i = batchStart; i < batchEnd; ++i) {
+                const QString pbrType = pbrKeys.at(i);
+                const QString absTexture = NormalizePathSlashes(
+                    QFileInfo(channelFiles.value(pbrType)).absoluteFilePath());
+                const QString validationType = kPbrToIngestValidation.value(pbrType, "DIFFUSE");
+                const QString jobName = QString("Dup_%1_%2")
+                    .arg(pbrType, QFileInfo(absTexture).completeBaseName());
+                const QJsonObject payload =
+                    BuildDuplicateValidatePayload(jobName, absTexture, outDirApi, validationType);
+                items.push_back({QJsonDocument(payload).toJson(QJsonDocument::Compact),
+                                 jobName, pbrType, QFileInfo(absTexture).completeBaseName()});
+            }
+
+            QNetworkAccessManager mgr;
+            QVector<QNetworkReply*> replies;
+            replies.reserve(items.size());
+            for (const auto& item : items) {
+                QNetworkRequest req(validateUrl);
+                req.setRawHeader("Accept", kRemixAccept);
+                req.setRawHeader("Content-Type", kRemixAccept);
+                replies.push_back(mgr.post(req, item.body));
+            }
+
+            int pending = replies.size();
+            QEventLoop batchLoop;
+            for (auto* r : replies) {
+                QObject::connect(r, &QNetworkReply::finished, &batchLoop, [&pending, &batchLoop]() {
+                    if (--pending <= 0) batchLoop.quit();
+                });
+            }
+            QTimer batchGuard;
+            batchGuard.setSingleShot(true);
+            QObject::connect(&batchGuard, &QTimer::timeout, &batchLoop, &QEventLoop::quit);
+            batchGuard.start(30000);
+            if (pending > 0) batchLoop.exec();
+
+            for (int i = 0; i < replies.size(); ++i) {
+                QNetworkReply* r = replies[i];
+                if (r->isFinished() && r->error() == QNetworkReply::NoError) {
+                    submitted.push_back({items[i].pbrType, items[i].jobName, items[i].origBase});
+                    m_logger.Info("Duplicate: submitted ingest job " + items[i].jobName);
+                } else {
+                    outErrors << QString("%1: validate submit failed: %2")
+                                     .arg(items[i].pbrType, r->errorString());
+                    m_logger.Warning("Duplicate: submit failed for " + items[i].pbrType +
+                                     ": " + r->errorString());
+                }
+                r->deleteLater();
+            }
+        }
+
+        if (submitted.isEmpty()) return false;
+
+        // ---- Step 6: poll /completed_schemas until every job resolves or timeout ----
+        QSet<QString> pendingNames;
+        QHash<QString, SubmittedJob> byName;
+        for (const auto& job : submitted) {
+            pendingNames.insert(job.jobName);
+            byName.insert(job.jobName, job);
+        }
+
+        constexpr int kPollIntervalMs = 2000;
+        constexpr int kTimeoutSec = 300;
+        QElapsedTimer elapsed;
+        elapsed.start();
+        m_logger.Info(QString("Duplicate: polling completed_schemas for %1 job(s)...")
+                          .arg(submitted.size()));
+
+        while (!pendingNames.isEmpty() && elapsed.elapsed() < qint64(kTimeoutSec) * 1000) {
+            QEventLoop waitLoop;
+            QTimer::singleShot(kPollIntervalMs, &waitLoop, &QEventLoop::quit);
+            waitLoop.exec();
+
+            QString pollErr;
+            const QJsonDocument doc = RequestJson(
+                "GET", "/ingestcraft/mass-validator/completed_schemas", {}, nullptr, &pollErr, 10.0, 1);
+            if (doc.isNull() || !doc.isObject()) continue;
+
+            const QJsonArray schemas = doc.object().value("completed_schemas").toArray();
+            for (const QJsonValue& sv : schemas) {
+                const QJsonObject schema = sv.toObject();
+                const QString name = schema.value("name").toString();
+                if (!pendingNames.contains(name)) continue;
+                pendingNames.remove(name);
+
+                const SubmittedJob job = byName.value(name);
+                const QString ingestedPath = ExtractDuplicateIngestedPath(schema, job.origBase);
+                QString absPath = ingestedPath;
+                if (!absPath.isEmpty() && !QDir::isAbsolutePath(absPath)) absPath = QDir::cleanPath(absPath);
+
+                if (absPath.isEmpty() || !QFileInfo::exists(absPath)) {
+                    outErrors << QString("%1: ingest completed but no usable output path")
+                                     .arg(job.pbrType);
+                    m_logger.Warning("Duplicate: no output path for " + name);
+                    continue;
+                }
+                outIngestedPaths.insert(job.pbrType, absPath);
+                m_logger.Info("Duplicate: ingested " + job.pbrType + ": " + absPath);
+            }
+        }
+        for (const QString& name : pendingNames) {
+            outErrors << QString("%1: ingest timed out after %2s")
+                             .arg(byName.value(name).pbrType).arg(kTimeoutSec);
+        }
+
+        return !outIngestedPaths.isEmpty();
+    }
+
+    void RemixConnector::DuplicateMaterialToRemix() {
+        QSettings settings("InstaMAT2Remix", "Config");
+
+        // 1. Resolve Remix project directory (ingest destination + source lookup).
+        QString remixDirAbs;
+        QString dirErr;
+        if (!GetRemixDefaultDirectory(remixDirAbs, dirErr)) {
+            QMessageBox::warning(nullptr, kPluginName,
+                "Duplicate Material failed:\n\nCould not determine Remix project directory:\n" + dirErr);
+            return;
+        }
+
+        // 2. Live export of the currently painted project — the SAME
+        //    out-of-process worker path Push uses (see
+        //    ExportActiveLayeringProject's header comment for why in-process
+        //    IElementExecution::Execute fail-fasts Studio 3.1+). The worker's
+        //    private AllocPackageFromFile instance already IS an independent
+        //    copy of the graph; publishing its bake under a fresh identity
+        //    below, without ever touching the source-linked prim, is the
+        //    "deep copy" this plugin can safely perform — there is no
+        //    in-process graph-clone API to reach for one (see CLAUDE.md
+        //    "Things That WILL NOT Work" — no GetActivePackage / project-
+        //    creation / channel-assignment API).
+        const QString exportDir = QDir::cleanPath(
+            QDir::tempPath() + "/InstaMAT2Remix_DuplicateExport");
+        if (QDir(exportDir).exists()) QDir(exportDir).removeRecursively();
+
+        QStringList exportedFilesList;
+        QString exportErr;
+        if (!ExportActiveLayeringProject(exportDir, exportedFilesList, exportErr)) {
+            m_logger.Warning("Duplicate failed at export: " + exportErr);
+            QMessageBox::warning(nullptr, kPluginName, "Duplicate Material failed:\n\n" + exportErr);
+            return;
+        }
+
+        QHash<QString, QString> exportedFiles;
+        for (const QString& filename : exportedFilesList) {
+            const QString stem = QFileInfo(filename).completeBaseName().toLower();
+            const QString abs = QDir::cleanPath(QDir(exportDir).filePath(filename));
+            if (QFileInfo::exists(abs) && kDuplicateChannels.contains(stem))
+                exportedFiles.insert(stem, abs);
+        }
+        if (!settings.value("IncludeOpacityMap", false).toBool()) {
+            exportedFiles.remove("opacity");
+        }
+
+        if (exportedFiles.isEmpty()) {
+            QMessageBox::warning(nullptr, kPluginName,
+                QString("Duplicate Material failed:\n\nThe export produced no pushable channel files in:\n  %1")
+                    .arg(exportDir));
+            return;
+        }
+
+        // 2b. Collapse guard — identical rationale to Push (step 4b): never
+        //     publish a 1x1 render-race output as a "duplicated" channel.
+        QStringList collapsedChannels;
+        for (auto it = exportedFiles.constBegin(); it != exportedFiles.constEnd(); ++it) {
+            if (it.key() == "height") continue; // height is legitimately flat/1x1
+            const QSize dim = QImageReader(it.value()).size();
+            if (dim.isValid() && (dim.width() <= 1 || dim.height() <= 1)) {
+                collapsedChannels << it.key();
+            }
+        }
+        if (m_exportHadCollapse || !collapsedChannels.isEmpty()) {
+            const QString chans = collapsedChannels.isEmpty()
+                ? QStringLiteral("one or more channels")
+                : collapsedChannels.join(", ");
+            m_logger.Warning("Duplicate aborted (collapse guard): 1x1 channel(s) [" + chans + "].");
+            QMessageBox::warning(nullptr, kPluginName,
+                "Duplicate Material stopped to protect your textures.\n\n"
+                "The renderer produced blank 1x1 output for: " + chans + ".\n"
+                "This happens when the GPU is busy with another graphics-heavy app.\n\n"
+                "Close it and try Duplicate Material again.\n\nDetails in the log:\n  " +
+                GetLogFilePath());
+            return;
+        }
+
+        // 3. Fresh identity for the new prim.
+        const QString newHash = GenerateMaterialHash();
+        const QString newMaterialPrim = "/RootNode/Looks/mat_" + newHash;
+        m_logger.Info("Duplicate: new prim " + newMaterialPrim);
+
+        // 4. Preserve MDL texture bindings the source material carries but
+        //    this export did not re-bake. The Remix REST surface exposes
+        //    texture bindings only (GET .../textures) — there is no generic
+        //    non-texture MDL-scalar endpoint anywhere in this codebase or in
+        //    Substance2Remix (its read-only parity reference), so binding
+        //    preservation is scoped to texture inputs.
+        QHash<QString, QString> preservedBindings; // mdlInput -> abs texture path
+        const QString sourcePrim = settings.value("LinkedMaterialPrim", "").toString();
+        if (!sourcePrim.isEmpty()) {
+            const QString encodedSrc = UrlEncodeKeepSlashes(NormalizePathSlashes(sourcePrim));
+            QString srcErr;
+            const QJsonDocument srcDoc = RequestJson(
+                "GET", QString("/stagecraft/assets/%1/textures").arg(encodedSrc), {}, nullptr, &srcErr);
+            if (srcDoc.isObject()) {
+                const QJsonArray textures = srcDoc.object().value("textures").toArray();
+                for (const QJsonValue& entry : textures) {
+                    if (!entry.isArray()) continue;
+                    const QJsonArray pair = entry.toArray();
+                    if (pair.size() < 2 || !pair.at(0).isString() || !pair.at(1).isString()) continue;
+                    const QString usdAttr = pair.at(0).toString();
+                    const QString channel = ResolveCanonicalChannel(usdAttr);
+                    if (channel.isEmpty() || exportedFiles.contains(channel)) continue; // fresh bake wins
+                    QString absTex = NormalizePathSlashes(pair.at(1).toString());
+                    if (!QDir::isAbsolutePath(absTex)) absTex = QDir(remixDirAbs).filePath(absTex);
+                    absTex = QDir::cleanPath(absTex);
+                    if (!QFileInfo::exists(absTex)) continue;
+                    for (const auto& spec : kDefaultPbrSpecs) {
+                        if (spec.pbrType == channel) {
+                            preservedBindings.insert(spec.mdlInput, absTex);
+                            break;
+                        }
+                    }
+                }
+            } else if (!srcErr.isEmpty()) {
+                m_logger.Info("Duplicate: could not read source bindings to preserve (" +
+                              srcErr + "); continuing without them.");
+            }
+        }
+
+        // 5. Stage baked channels under the new hash (StageSourceForIngest
+        //    requires a transient/temp-rooted source; see its header comment).
+        const QString outputSubfolder = settings.value(
+            "RemixOutputSubfolder", "Textures/InstaMAT2Remix_Ingested").toString();
+        const QString targetIngestDirAbs = QDir(remixDirAbs).filePath(outputSubfolder);
+        QDir().mkpath(targetIngestDirAbs);
+
+        QHash<QString, QString> stagedFiles;
+        for (auto it = exportedFiles.constBegin(); it != exportedFiles.constEnd(); ++it) {
+            const QString destName = QString("%1_%2.%3")
+                .arg(newHash, it.key(), QFileInfo(it.value()).suffix());
+            QString stageErr;
+            const QString staged = StageSourceForIngest(it.value(), destName, stageErr);
+            stagedFiles.insert(it.key(), staged.isEmpty() ? it.value() : staged);
+            if (staged.isEmpty()) {
+                m_logger.Warning(QString("Duplicate: pre-ingest stage failed for %1: %2 — using original path.")
+                                     .arg(it.key(), stageErr));
+            }
+        }
+
+        // 6. USD sidecar — a local deliverable alongside the baked set (Remix
+        //    has no "attach a .usda" ingest endpoint to upload it through).
+        QString usdaPath;
+        {
+            QList<QPair<QString, QString>> pairs;
+            for (const auto& spec : kDefaultPbrSpecs) {
+                if (exportedFiles.contains(spec.pbrType))
+                    pairs.append({spec.mdlInput, QFileInfo(stagedFiles.value(spec.pbrType)).fileName()});
+            }
+            for (auto it = preservedBindings.constBegin(); it != preservedBindings.constEnd(); ++it)
+                pairs.append({it.key(), QFileInfo(it.value()).fileName()});
+
+            usdaPath = QDir(exportDir).filePath("mat_" + newHash + ".usda");
+            QFile f(usdaPath);
+            if (f.open(QIODevice::WriteOnly | QIODevice::Text)) {
+                f.write(BuildDuplicateUsdaSidecar(newMaterialPrim, pairs).toUtf8());
+                f.close();
+            } else {
+                m_logger.Warning("Duplicate: could not write USDA sidecar: " + usdaPath);
+            }
+        }
+
+        // 7. Async ingest: POST /validate (<= kMaxDuplicateIngestWorkers at a
+        //    time) then poll GET /completed_schemas until every job resolves
+        //    — no blind wait (contrast Push's single blocking /queue/material
+        //    call per texture).
+        QProgressDialog progress("Duplicating material to RTX Remix...", "Cancel", 0, 0, nullptr);
+        progress.setWindowTitle(kPluginName);
+        progress.setWindowModality(Qt::WindowModal);
+        progress.setMinimumDuration(0);
+        progress.show();
+        QCoreApplication::processEvents();
+
+        QHash<QString, QString> ingestedPaths;
+        QStringList ingestErrors;
+        DuplicateIngestChannelsAsync(stagedFiles, targetIngestDirAbs, ingestedPaths, ingestErrors);
+
+        if (ingestedPaths.isEmpty() && preservedBindings.isEmpty()) {
+            QMessageBox::warning(nullptr, kPluginName,
+                "Duplicate Material failed:\n\nAll texture ingestions failed:\n" + ingestErrors.join("\n"));
+            return;
+        }
+
+        // 8. Register the new prim: freshly-ingested channels first, falling
+        //    back to a preserved source binding for anything not re-baked.
+        QJsonArray texturePairs;
+        for (const auto& spec : kDefaultPbrSpecs) {
+            QString absOut;
+            if (ingestedPaths.contains(spec.pbrType)) absOut = ingestedPaths.value(spec.pbrType);
+            else if (preservedBindings.contains(spec.mdlInput)) absOut = preservedBindings.value(spec.mdlInput);
+            if (absOut.isEmpty()) continue;
+            QJsonArray pair;
+            pair.append(NormalizePathSlashes(newMaterialPrim) + "/Shader.inputs:" + spec.mdlInput);
+            pair.append(NormalizePathSlashes(absOut));
+            texturePairs.append(pair);
+        }
+        if (texturePairs.isEmpty()) {
+            QMessageBox::warning(nullptr, kPluginName,
+                "Duplicate Material failed:\n\nNo ingested or preserved texture bindings to register.");
+            return;
+        }
+
+        QJsonObject updatePayload;
+        updatePayload.insert("force", true);
+        updatePayload.insert("textures", texturePairs);
+        QJsonDocument updateBody(updatePayload);
+        QString updateErr;
+        progress.setLabelText("Registering the new material prim...");
+        QCoreApplication::processEvents();
+        const QJsonDocument updateResp = RequestJson("PUT", "/stagecraft/textures/", {}, &updateBody, &updateErr);
+        if (updateResp.isNull()) {
+            QMessageBox::warning(nullptr, kPluginName,
+                "Duplicate Material failed:\n\nCould not register the new material prim:\n" + updateErr);
+            return;
+        }
+
+        // 9. Save the layer (best-effort — mirrors Push step 8).
+        QString layerId;
+        {
+            QString a1, a2;
+            const QJsonDocument d1 = RequestJson("GET", "/stagecraft/layers/target", {}, nullptr, &a1);
+            if (d1.isObject()) layerId = d1.object().value("layer_id").toString();
+            if (layerId.isEmpty()) {
+                const QJsonDocument d2 = RequestJson("GET", "/stagecraft/project/", {}, nullptr, &a2);
+                if (d2.isObject()) layerId = d2.object().value("layer_id").toString();
+            }
+        }
+        if (!layerId.isEmpty()) {
+            const QString encLayer = UrlEncodeKeepColonAndSlashes(NormalizePathSlashes(layerId));
+            QString saveErr;
+            RequestJson("POST", QString("/stagecraft/layers/%1/save").arg(encLayer), {}, nullptr, &saveErr);
+        }
+
+        // 10. Summary.
+        QString summary = QString("Duplicate complete.\n\nNew material: %1\nChannels ingested: %2")
+                              .arg(newMaterialPrim).arg(ingestedPaths.size());
+        if (!preservedBindings.isEmpty()) {
+            summary += QString("\nPreserved source binding(s): %1").arg(preservedBindings.size());
+        }
+        summary += "\n\nUSD sidecar: " + usdaPath;
         if (!ingestErrors.isEmpty()) {
             summary += "\n\nIngest warnings:\n" + ingestErrors.join("\n");
         }

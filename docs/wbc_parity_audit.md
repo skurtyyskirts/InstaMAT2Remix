@@ -18,6 +18,7 @@ Legend: ✅ parity | 🟨 parity with an intentional platform deviation | ➕ In
 | Import Textures from Remix | Import Textures from Remix | ✅ |
 | Push To Remix | Push To Remix | ✅ |
 | Force Push to Remix | Force Push to Remix | ✅ |
+| *(no WBC equivalent)* | Duplicate Material to Remix | ➕ InstaMAT-only, see below |
 | Settings... / Diagnostics... / About... | same | ✅ |
 | *(none)* | menu separator before Settings... | ➕ cosmetic |
 | *(WBC has no Relink item)* | *(standalone Relink Material removed)* | ✅ |
@@ -68,6 +69,33 @@ titles its top-level menu the same.
 |---|---|---|---|
 | Silent relink to current Remix selection (persisted) | ✅ | ✅ (no confirm dialog) | ✅ |
 | Non-overwriting root `<hash>_1/_2/…` (boundary-aware .dds scan) | ✅ | ✅ (`ChooseNonOverwritingRoot`, unit-tested) | ✅ |
+
+## Duplicate Material to Remix (InstaMAT2Duplicate)
+
+Not a WBC/Substance2Remix feature — no `Duplicate` action exists anywhere in
+that reference plugin (checked read-only, per workspace rule 1). This is an
+InstaMAT-only addition (➕): exports the currently painted project (same
+out-of-process `InstaMAT2RemixExport.exe` worker Push uses — no in-process
+`IElementExecution::Execute`) and publishes it to Remix as a **new,
+independent** material prim under a fresh identity, leaving the
+source/linked material untouched.
+
+| Behavior | Implementation | Notes |
+|---|---|---|
+| Channels | Albedo / Normal / Roughness / Metallic / Emissive / Height / Opacity (Opacity gated by `IncludeOpacityMap`, same as Push) | subset of `kDefaultPbrSpecs` |
+| Deep-copy the graph | out-of-process export of the on-disk `.IMP`'s private `AllocPackageFromFile` instance, published under a new identity | 🟨 — the SDK has no in-process graph-clone/duplicate API (see "Things That WILL NOT Work" in `CLAUDE.md`); this is the closest safe equivalent reachable through the documented SDK surface |
+| New identity | `GenerateMaterialHash()` — `XXH3_64bits` of a fresh random UUID, 16 uppercase hex chars → `/RootNode/Looks/mat_<hash>` | vendored `vendor/xxhash.h` (BSD-2-Clause) |
+| BCn re-bake | Remix's own `ConvertToDDS` ingest check-plugin (same as Push — neither flow shells out to `texconv.exe` for this step) | server-side, not local |
+| Ingest workflow | `POST /ingestcraft/mass-validator/validate` (≤8 concurrent, `kMaxDuplicateIngestWorkers`) → poll `GET /ingestcraft/mass-validator/completed_schemas` until every job resolves or 300 s | deliberately **not** the single blocking `/queue/material` call Push uses — no blind wait |
+| MDL parameter preservation | texture bindings only, for channels the source material has but this export did not re-bake (`GET /stagecraft/assets/<source>/textures`) | 🟨 — the Remix REST surface (here and in Substance2Remix, checked read-only) has no generic non-texture MDL-scalar endpoint; broader parameter preservation is not achievable through documented endpoints |
+| USD sidecar | `.usda` written next to the baked set in the export dir (`mat_<hash>.usda`, `AperturePBR_Translucency` MDL bindings) | local deliverable only — Remix has no ingest endpoint to upload a `.usda` through |
+| `PUT /stagecraft/textures/` `{force:true}` on the **new** prim + layer save | ✅ | source-linked prim is never modified |
+
+**Not yet live-verified** (same caveat as the rest of v0.0.1-alpha — see
+CLAUDE.md "Known issues"): headless-reasoned against the documented SDK/REST
+surface and the existing Push code path it reuses, but a click-through
+(Duplicate Material → Remix shows a second, independent material) has not
+been user-confirmed.
 
 ## Settings
 
@@ -128,6 +156,10 @@ automation must run on the UI thread anyway.
 - Out-of-process export worker (Studio can never be crashed by a failed
   export — the layer graph executes in `InstaMAT2RemixExport.exe`, which
   hosts the SDK itself and binds the linked mesh by raw bytes)
+- Duplicate Material to Remix (`InstaMAT2Duplicate`) — publishes the active
+  project as a new, independent Remix material under a fresh XXH3-64
+  identity via an async (non-blind-wait) ingest workflow; see the section
+  above. No WBC/Substance2Remix equivalent exists.
 
 ## Known intentional deviations (summary)
 
@@ -135,4 +167,5 @@ automation must run on the UI thread anyway.
 2. **Link state is global** (QSettings), not per-project — SDK has no project metadata.
 3. **Push reads the last saved state** (Ctrl+S + Retry dialog) — SDK cannot execute the live document.
 4. **No multi-mesh material-group bundling on Pull** — future work.
+5. **Duplicate preserves texture bindings only, not arbitrary MDL scalars** — the Remix REST surface has no generic non-texture-parameter endpoint.
 5. **QSettings instead of settings.json**; progress is synchronous-modal.

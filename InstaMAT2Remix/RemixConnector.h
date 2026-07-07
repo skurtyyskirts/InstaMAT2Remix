@@ -8,11 +8,15 @@
 #include <memory>
 #include <QObject>
 #include <QDateTime>
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QJsonObject>
 #include <QMap>
+#include <QPair>
 #include <QSize>
 #include <QString>
+#include <QStringList>
 #include <QVector>
 
 class QProgressDialog;
@@ -42,6 +46,16 @@ namespace InstaMAT2Remix {
         // forceRelinkAndRename (Force Push) silently relinks to the current
         // Remix selection and stages under a non-overwriting filename root.
         void PushToRemix(bool forceRelinkAndRename);
+
+        // InstaMAT2Duplicate: live-export the currently painted project (same
+        // out-of-process worker path as Push — see ExportActiveLayeringProject)
+        // and publish it to Remix as a NEW, independent material prim under a
+        // fresh XXH3-64 identity. The linked/source material is never modified.
+        // MDL texture bindings the source material carries but this export did
+        // not re-bake are copied onto the new prim (best-effort; the Remix REST
+        // surface has no generic non-texture MDL-scalar endpoint — see
+        // GenerateMaterialHash / BuildDuplicateUsdaSidecar below).
+        void DuplicateMaterialToRemix();
 
         ExternalTools& GetTools() { return m_tools; }
 
@@ -129,6 +143,38 @@ namespace InstaMAT2Remix {
         // computation, public for QtTest.
         static QString MeshCacheDirFor(const QString& meshPath);
 
+        // --- InstaMAT2Duplicate helpers (public so QtTest can exercise them
+        // without `#define private public` fighting MSVC name mangling on
+        // static members — same rationale as the Force Push helpers above). ---
+
+        // 16-character uppercase hex XXH3-64 digest of a fresh random UUID.
+        // Used as both the new material's short identity and its Looks prim
+        // suffix (/RootNode/Looks/mat_<hash>), matching the existing prim
+        // naming convention DeriveDesiredRootFromPrim reads back.
+        static QString GenerateMaterialHash();
+
+        // Builds the AperturePBR_Translucency .usda Material definition
+        // written alongside each duplicated texture set. channels is a list
+        // of (mdlInput, relative texture filename) pairs; diffuse_texture and
+        // emissive_mask_texture are annotated colorSpace="sRGB".
+        static QString BuildDuplicateUsdaSidecar(
+            const QString& materialPrimPath,
+            const QList<QPair<QString, QString>>& channels);
+
+        // Builds one POST /ingestcraft/mass-validator/validate request body.
+        static QJsonObject BuildDuplicateValidatePayload(
+            const QString& jobName,
+            const QString& absTexturePath,
+            const QString& outDirApi,
+            const QString& validationType);
+
+        // Pulls the ingested .dds/.rtex.dds output path out of one entry of
+        // completed_schemas' array, preferring a match against origBase and
+        // preferring .rtex.dds over .dds.
+        static QString ExtractDuplicateIngestedPath(
+            const QJsonObject& schema,
+            const QString&     origBase);
+
     private:
         InstaMAT::IInstaMAT& m_instaMAT;
         ExternalTools m_tools;
@@ -188,6 +234,21 @@ namespace InstaMAT2Remix {
                                   const QString& targetIngestDirAbs,
                                   QString&       outIngested,
                                   QString&       outIngestErr) const;
+
+        // --- InstaMAT2Duplicate async ingest ------------------------------
+        // POST /ingestcraft/mass-validator/validate (max kMaxDuplicateIngestWorkers
+        // in flight at once) then poll GET .../completed_schemas until every
+        // submitted job resolves or timeoutSeconds elapses. Unlike
+        // IngestTextureToRemix (a single blocking call per texture on the
+        // synchronous /queue/material endpoint), this never blind-waits: each
+        // poll pass only consumes jobs Remix has actually reported complete.
+        static constexpr int kMaxDuplicateIngestWorkers = 8;
+
+        bool DuplicateIngestChannelsAsync(
+            const QHash<QString, QString>& channelFiles, // pbrType -> abs texture path
+            const QString&                 targetIngestDirAbs,
+            QHash<QString, QString>&       outIngestedPaths, // pbrType -> abs ingested path
+            QStringList&                   outErrors) const;
 
         // Renders the user's saved layer project into outDir as canonical
         // channel files (albedo.png, normal.png, …). Mirrors WBC's
