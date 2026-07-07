@@ -3422,7 +3422,8 @@ namespace InstaMAT2Remix {
         const QHash<QString, QString>& channelFiles,
         const QString&                 targetIngestDirAbs,
         QHash<QString, QString>&       outIngestedPaths,
-        QStringList&                   outErrors) const {
+        QStringList&                   outErrors,
+        QProgressDialog*                progress) const {
         outIngestedPaths.clear();
         outErrors.clear();
         if (channelFiles.isEmpty()) return false;
@@ -3439,6 +3440,7 @@ namespace InstaMAT2Remix {
         // ---- Step 5: POST /validate, at most kMaxDuplicateIngestWorkers in flight ----
         const QStringList pbrKeys = channelFiles.keys();
         for (int batchStart = 0; batchStart < pbrKeys.size(); batchStart += kMaxDuplicateIngestWorkers) {
+            if (progress && progress->wasCanceled()) return false;
             const int batchEnd = qMin(batchStart + kMaxDuplicateIngestWorkers, pbrKeys.size());
 
             struct BatchItem { QByteArray body; QString jobName; QString pbrType; QString origBase; };
@@ -3513,9 +3515,15 @@ namespace InstaMAT2Remix {
                           .arg(submitted.size()));
 
         while (!pendingNames.isEmpty() && elapsed.elapsed() < qint64(kTimeoutSec) * 1000) {
+            if (progress && progress->wasCanceled()) {
+                m_logger.Info("Duplicate: ingest polling cancelled by user.");
+                return false;
+            }
+
             QEventLoop waitLoop;
             QTimer::singleShot(kPollIntervalMs, &waitLoop, &QEventLoop::quit);
             waitLoop.exec();
+            QCoreApplication::processEvents(); // keep the Cancel button responsive
 
             QString pollErr;
             const QJsonDocument doc = RequestJson(
@@ -3532,7 +3540,9 @@ namespace InstaMAT2Remix {
                 const SubmittedJob job = byName.value(name);
                 const QString ingestedPath = ExtractDuplicateIngestedPath(schema, job.origBase);
                 QString absPath = ingestedPath;
-                if (!absPath.isEmpty() && !QDir::isAbsolutePath(absPath)) absPath = QDir::cleanPath(absPath);
+                if (!absPath.isEmpty() && !QDir::isAbsolutePath(absPath))
+                    absPath = QDir(targetIngestDirAbs).filePath(absPath);
+                if (!absPath.isEmpty()) absPath = QDir::cleanPath(absPath);
 
                 if (absPath.isEmpty() || !QFileInfo::exists(absPath)) {
                     outErrors << QString("%1: ingest completed but no usable output path")
@@ -3693,32 +3703,12 @@ namespace InstaMAT2Remix {
             }
         }
 
-        // 6. USD sidecar — a local deliverable alongside the baked set (Remix
-        //    has no "attach a .usda" ingest endpoint to upload it through).
-        QString usdaPath;
-        {
-            QList<QPair<QString, QString>> pairs;
-            for (const auto& spec : kDefaultPbrSpecs) {
-                if (exportedFiles.contains(spec.pbrType))
-                    pairs.append({spec.mdlInput, QFileInfo(stagedFiles.value(spec.pbrType)).fileName()});
-            }
-            for (auto it = preservedBindings.constBegin(); it != preservedBindings.constEnd(); ++it)
-                pairs.append({it.key(), QFileInfo(it.value()).fileName()});
-
-            usdaPath = QDir(exportDir).filePath("mat_" + newHash + ".usda");
-            QFile f(usdaPath);
-            if (f.open(QIODevice::WriteOnly | QIODevice::Text)) {
-                f.write(BuildDuplicateUsdaSidecar(newMaterialPrim, pairs).toUtf8());
-                f.close();
-            } else {
-                m_logger.Warning("Duplicate: could not write USDA sidecar: " + usdaPath);
-            }
-        }
-
-        // 7. Async ingest: POST /validate (<= kMaxDuplicateIngestWorkers at a
+        // 6. Async ingest: POST /validate (<= kMaxDuplicateIngestWorkers at a
         //    time) then poll GET /completed_schemas until every job resolves
         //    — no blind wait (contrast Push's single blocking /queue/material
-        //    call per texture).
+        //    call per texture). The Cancel button is real: it can't recall a
+        //    job already POSTed to Remix, but it stops us waiting on/
+        //    registering results, so nothing further happens on our side.
         QProgressDialog progress("Duplicating material to RTX Remix...", "Cancel", 0, 0, nullptr);
         progress.setWindowTitle(kPluginName);
         progress.setWindowModality(Qt::WindowModal);
@@ -3728,12 +3718,43 @@ namespace InstaMAT2Remix {
 
         QHash<QString, QString> ingestedPaths;
         QStringList ingestErrors;
-        DuplicateIngestChannelsAsync(stagedFiles, targetIngestDirAbs, ingestedPaths, ingestErrors);
+        DuplicateIngestChannelsAsync(stagedFiles, targetIngestDirAbs, ingestedPaths, ingestErrors, &progress);
 
+        if (progress.wasCanceled()) {
+            QMessageBox::information(nullptr, kPluginName, "Duplicate Material cancelled.");
+            return;
+        }
         if (ingestedPaths.isEmpty() && preservedBindings.isEmpty()) {
             QMessageBox::warning(nullptr, kPluginName,
                 "Duplicate Material failed:\n\nAll texture ingestions failed:\n" + ingestErrors.join("\n"));
             return;
+        }
+
+        // 7. USD sidecar — a local deliverable alongside the baked set (Remix
+        //    has no "attach a .usda" ingest endpoint to upload it through).
+        //    Uses the REAL final asset locations (freshly-ingested paths
+        //    inside the Remix project, or preserved paths from the source
+        //    material) as absolute asset references — the staged pre-ingest
+        //    copies (stagedFiles) and exportDir do not share a directory
+        //    with the sidecar, so a bare filename would not resolve.
+        QString usdaPath;
+        {
+            QList<QPair<QString, QString>> pairs;
+            for (const auto& spec : kDefaultPbrSpecs) {
+                if (ingestedPaths.contains(spec.pbrType))
+                    pairs.append({spec.mdlInput, NormalizePathSlashes(ingestedPaths.value(spec.pbrType))});
+                else if (preservedBindings.contains(spec.mdlInput))
+                    pairs.append({spec.mdlInput, NormalizePathSlashes(preservedBindings.value(spec.mdlInput))});
+            }
+
+            usdaPath = QDir(exportDir).filePath("mat_" + newHash + ".usda");
+            QFile f(usdaPath);
+            if (f.open(QIODevice::WriteOnly | QIODevice::Text)) {
+                f.write(BuildDuplicateUsdaSidecar(newMaterialPrim, pairs).toUtf8());
+                f.close();
+            } else {
+                m_logger.Warning("Duplicate: could not write USDA sidecar: " + usdaPath);
+            }
         }
 
         // 8. Register the new prim: freshly-ingested channels first, falling

@@ -12,6 +12,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QList>
 #include <QMap>
 #include <QPair>
 #include <QSize>
@@ -244,11 +245,16 @@ namespace InstaMAT2Remix {
         // poll pass only consumes jobs Remix has actually reported complete.
         static constexpr int kMaxDuplicateIngestWorkers = 8;
 
+        // progress may be null; when non-null, its Cancel button is honored
+        // at batch-submit boundaries and on each poll pass (a job already
+        // POSTed to Remix keeps processing server-side either way — this
+        // only stops the plugin waiting on / registering results).
         bool DuplicateIngestChannelsAsync(
             const QHash<QString, QString>& channelFiles, // pbrType -> abs texture path
             const QString&                 targetIngestDirAbs,
             QHash<QString, QString>&       outIngestedPaths, // pbrType -> abs ingested path
-            QStringList&                   outErrors) const;
+            QStringList&                   outErrors,
+            QProgressDialog*               progress = nullptr) const;
 
         // Renders the user's saved layer project into outDir as canonical
         // channel files (albedo.png, normal.png, …). Mirrors WBC's

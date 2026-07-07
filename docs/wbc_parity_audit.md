@@ -168,4 +168,4 @@ automation must run on the UI thread anyway.
 3. **Push reads the last saved state** (Ctrl+S + Retry dialog) — SDK cannot execute the live document.
 4. **No multi-mesh material-group bundling on Pull** — future work.
 5. **Duplicate preserves texture bindings only, not arbitrary MDL scalars** — the Remix REST surface has no generic non-texture-parameter endpoint.
-5. **QSettings instead of settings.json**; progress is synchronous-modal.
+6. **QSettings instead of settings.json**; progress is synchronous-modal.
