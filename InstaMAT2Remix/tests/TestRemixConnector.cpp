@@ -10,6 +10,8 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QJsonDocument>
+#include <QPair>
+#include <QRegularExpression>
 
 #define private public
 #include "RemixConnector.h"
@@ -537,6 +539,118 @@ private slots:
 
         // Missing file is rejected.
         QVERIFY(!InstaMAT2Remix::ReadDdsDimensions(tmp.path() + "/missing.dds", w, h));
+    }
+
+    // ---- InstaMAT2Duplicate ------------------------------------------------
+
+    void testGenerateMaterialHash_format() {
+        using IM = InstaMAT2Remix::RemixConnector;
+        const QString h = IM::GenerateMaterialHash();
+        QCOMPARE(h.length(), 16);
+        const QRegularExpression hexRe("^[0-9A-F]{16}$");
+        QVERIFY2(hexRe.match(h).hasMatch(),
+                 qPrintable("Hash not 16 uppercase hex chars: " + h));
+    }
+
+    void testGenerateMaterialHash_unique() {
+        using IM = InstaMAT2Remix::RemixConnector;
+        const QString h1 = IM::GenerateMaterialHash();
+        const QString h2 = IM::GenerateMaterialHash();
+        QVERIFY2(h1 != h2, "Two consecutive hashes were identical");
+    }
+
+    void testBuildDuplicateUsdaSidecar_containsPrimPathAndMdlInputs() {
+        using IM = InstaMAT2Remix::RemixConnector;
+        const QString primPath = "/RootNode/Looks/mat_AABBCCDD11223344";
+        QList<QPair<QString, QString>> channels = {
+            {"diffuse_texture",   "mat_AABBCCDD11223344_albedo.dds"},
+            {"normalmap_texture", "mat_AABBCCDD11223344_normal.dds"},
+        };
+        const QString usda = IM::BuildDuplicateUsdaSidecar(primPath, channels);
+        QVERIFY2(usda.contains("mat_AABBCCDD11223344"), "USDA missing material hash");
+        QVERIFY2(usda.contains("AperturePBR_Translucency"), "USDA missing MDL source identifier");
+        QVERIFY2(usda.contains("diffuse_texture"), "USDA missing diffuse_texture MDL input");
+        QVERIFY2(usda.contains("normalmap_texture"), "USDA missing normalmap_texture MDL input");
+    }
+
+    void testBuildDuplicateUsdaSidecar_sRGBAnnotation() {
+        using IM = InstaMAT2Remix::RemixConnector;
+        const QString primPath = "/RootNode/Looks/mat_TEST0000TEST0000";
+        QList<QPair<QString, QString>> channels = {
+            {"diffuse_texture",             "albedo.dds"},
+            {"normalmap_texture",           "normal.dds"},
+            {"reflectionroughness_texture", "roughness.dds"},
+        };
+        const QString usda = IM::BuildDuplicateUsdaSidecar(primPath, channels);
+        QVERIFY2(usda.indexOf("diffuse_texture") < usda.indexOf("colorSpace"),
+                 "sRGB annotation not placed after diffuse_texture");
+        QCOMPARE(usda.count("colorSpace = \"sRGB\""), 1);
+    }
+
+    void testBuildDuplicateUsdaSidecar_startsWithMagicAndMdlTokens() {
+        using IM = InstaMAT2Remix::RemixConnector;
+        const QString primPath = "/RootNode/Looks/mat_00000000FFFFFFFF";
+        const QString usda = IM::BuildDuplicateUsdaSidecar(primPath, {});
+        QVERIFY2(usda.startsWith("#usda 1.0"), "USDA must start with '#usda 1.0'");
+        QVERIFY(usda.contains("outputs:mdl:surface.connect"));
+        QVERIFY(usda.contains("outputs:mdl:displacement.connect"));
+        QVERIFY(usda.contains("outputs:mdl:volume.connect"));
+    }
+
+    void testBuildDuplicateValidatePayload_shape() {
+        using IM = InstaMAT2Remix::RemixConnector;
+        const QJsonObject payload = IM::BuildDuplicateValidatePayload(
+            "Dup_albedo_mat_ABC", "/tmp/InstaMAT2Remix_PreIngest/mat_ABC_albedo.png",
+            "/remix/project/Textures/InstaMAT2Remix_Ingested", "DIFFUSE");
+
+        QCOMPARE(payload.value("name").toString(), QString("Dup_albedo_mat_ABC"));
+        QCOMPARE(payload.value("executor").toInt(), 1);
+
+        const QJsonObject ctx = payload.value("context_plugin").toObject();
+        QCOMPARE(ctx.value("name").toString(), QString("TextureImporter"));
+        const QJsonObject ctxData = ctx.value("data").toObject();
+        const QJsonArray inputFiles = ctxData.value("input_files").toArray();
+        QCOMPARE(inputFiles.size(), 1);
+        const QJsonArray firstInput = inputFiles.at(0).toArray();
+        QCOMPARE(firstInput.at(0).toString(), QString("/tmp/InstaMAT2Remix_PreIngest/mat_ABC_albedo.png"));
+        QCOMPARE(firstInput.at(1).toString(), QString("DIFFUSE"));
+
+        const QJsonArray checks = payload.value("check_plugins").toArray();
+        QCOMPARE(checks.size(), 1);
+        QCOMPARE(checks.at(0).toObject().value("name").toString(), QString("ConvertToDDS"));
+    }
+
+    void testExtractDuplicateIngestedPath_prefersRtexDds() {
+        using IM = InstaMAT2Remix::RemixConnector;
+
+        auto makeSchema = [](const QStringList& outputs) {
+            QJsonArray outs;
+            for (const QString& o : outputs) outs.append(o);
+            QJsonObject flow{{"channel", "ingestion_output"}, {"output_data", outs}};
+            QJsonObject data{{"data_flows", QJsonArray{flow}}};
+            QJsonObject ctx{{"name", "TextureImporter"}, {"data", data}};
+            return QJsonObject{{"context_plugin", ctx}};
+        };
+
+        const QJsonObject schema = makeSchema({
+            "/out/mat_ABC_albedo.dds",
+            "/out/mat_ABC_albedo.rtex.dds",
+        });
+        QCOMPARE(IM::ExtractDuplicateIngestedPath(schema, "mat_ABC_albedo"),
+                 QString("/out/mat_ABC_albedo.rtex.dds"));
+    }
+
+    void testExtractDuplicateIngestedPath_noMatchFallsBackToFirst() {
+        using IM = InstaMAT2Remix::RemixConnector;
+
+        QJsonObject flow{{"channel", "ingestion_output"},
+                         {"output_data", QJsonArray{"/out/unrelated.dds"}}};
+        QJsonObject data{{"data_flows", QJsonArray{flow}}};
+        QJsonObject ctx{{"name", "TextureImporter"}, {"data", data}};
+        QJsonObject schema{{"context_plugin", ctx}};
+
+        QCOMPARE(IM::ExtractDuplicateIngestedPath(schema, "no_such_base"),
+                 QString("/out/unrelated.dds"));
     }
 };
 

@@ -41,8 +41,10 @@ Logs land at `Documents\InstaMAT2Remix\logs\remix_connector.log`.
 ## Current architecture (v0.0.1-alpha, 2026-07-07)
 
 Menu ("RTX Remix Connector", exact WBC labels/order): Pull From Remix /
-Import Textures from Remix / Push To Remix / Force Push to Remix / — /
-Settings... / Diagnostics... / About...
+Import Textures from Remix / Push To Remix / Force Push to Remix /
+Duplicate Material to Remix / — / Settings... / Diagnostics... / About...
+(Duplicate has no WBC/Substance2Remix equivalent — InstaMAT-only, see below
+and `docs/wbc_parity_audit.md`.)
 
 - **Pull From Remix** (`RemixConnector::PullFromRemix`, zero prompts):
   resolve Remix selection (`/stagecraft/assets/` + `/material` +
@@ -128,6 +130,33 @@ Settings... / Diagnostics... / About...
   Push summary + `m_exportHadCollapse` warn the user to close GPU-heavy apps
   and re-push. A worker crash/timeout fails the push cleanly — Studio itself
   can no longer be taken down by an export.
+- **Duplicate Material to Remix** (`RemixConnector::DuplicateMaterialToRemix`,
+  `InstaMAT2Duplicate`): no WBC/Substance2Remix equivalent (checked
+  read-only). Reuses `ExportActiveLayeringProject` (the same out-of-process
+  worker path as Push — never in-process `Execute`) to bake the currently
+  painted project, then publishes it to Remix as a **new, independent**
+  material prim under a fresh identity, never touching the source-linked
+  prim. Identity: `GenerateMaterialHash()` — `XXH3_64bits` (vendored
+  `vendor/xxhash.h`, `XXH_INLINE_ALL`, BSD-2-Clause) of a fresh random UUID,
+  16 uppercase hex chars → `/RootNode/Looks/mat_<hash>`. Channels: the same
+  seven WBC-parity PBR types Push uses (Albedo/Normal/Roughness/Metallic/
+  Emissive/Height/Opacity, opacity gated by `IncludeOpacityMap`). BCn
+  encoding happens server-side via Remix's `ConvertToDDS` ingest
+  check-plugin (same as Push — no local texconv step). Ingest is
+  deliberately **async**, unlike Push's single blocking `/queue/material`
+  call: `POST /ingestcraft/mass-validator/validate` (≤8 concurrent,
+  `kMaxDuplicateIngestWorkers`, `DuplicateIngestChannelsAsync`) then poll
+  `GET /ingestcraft/mass-validator/completed_schemas` until every submitted
+  job resolves or 300 s elapse — no blind wait. MDL parameter preservation
+  is scoped to **texture bindings only** (`GET
+  /stagecraft/assets/<source>/textures`, for channels the source material
+  carries but this export did not re-bake) — the Remix REST surface has no
+  generic non-texture MDL-scalar endpoint anywhere in this codebase or in
+  Substance2Remix. Writes a local `.usda` sidecar (`AperturePBR_Translucency`
+  bindings) next to the baked set — Remix has no ingest endpoint to upload
+  one through. `PUT /stagecraft/textures/` `{force:true}` on the new prim +
+  best-effort layer save, mirroring Push's tail. See
+  `docs/wbc_parity_audit.md` for the full behavior table.
 - **Settings** (QSettings "InstaMAT2Remix"/"Config", 5 tabs matching WBC):
   Connection / Paths (texconv, Blender, Export Folder, Remix output
   subfolder, log) / Pull (tiling, unwrap) / Export (format, resolution,
@@ -142,8 +171,11 @@ Settings... / Diagnostics... / About...
 ## Key files
 
 - `InstaMAT2Remix/RemixConnector.cpp/.h` — all flows (Pull ~1980, Import
-  ~2150, worker-driven export ~2680-2850, Push ~2860), REST helpers,
-  Force Push statics, recipe (anon namespace ~270-1330).
+  ~2150, worker-driven export ~2680-2850, Push ~2860, Duplicate ~3255-3780),
+  REST helpers, Force Push statics, recipe (anon namespace ~270-1330).
+- `InstaMAT2Remix/vendor/xxhash.h` — vendored xxHash (BSD-2-Clause,
+  upstream `Cyan4973/xxHash`), included with `XXH_INLINE_ALL` from
+  `RemixConnector.cpp` only, for `GenerateMaterialHash()`.
 - `InstaMAT2Remix/ExportWorker.cpp` — `InstaMAT2RemixExport.exe`, the
   out-of-process exporter (standalone SDK host; Qt-free; `IM2RX` stdout
   protocol; two-pass output walk; `ReadBakeResolutionFromImp` for Auto size;
@@ -158,9 +190,10 @@ Settings... / Diagnostics... / About...
   `DiagnosticsDialog.cpp`, `PluginPaths.cpp`, `Logger.cpp`,
   `RemixNodes.cpp` (Element node), `CExports.cpp` (C ABI),
   `rtx_remix_connector.py` (optional Python bridge, env-gated).
-- `InstaMAT2Remix/tests/TestRemixConnector.cpp` — 16 QtTest cases (channel
+- `InstaMAT2Remix/tests/TestRemixConnector.cpp` — QtTest cases (channel
   table, layer-package finder, staging incl. forced names, MeshData, Force
-  Push root chooser). `tests/test_rtx_remix_connector.py` — 5 pytest cases.
+  Push root chooser, InstaMAT2Duplicate hash/USDA/ingest-payload helpers).
+  `tests/test_rtx_remix_connector.py` — 5 pytest cases.
 - `docs/wbc_parity_audit.md` — parity tracker; read before adding features.
 
 ## Build/toolchain gotchas
@@ -221,6 +254,12 @@ renames them, the recipe falls back to its diagnostic dump and
 
 ## Known issues / next steps
 
+- **Duplicate Material to Remix live smoke test pending** (2026-07-07):
+  `DuplicateMaterialToRemix` reuses the same headless-verified
+  `ExportActiveLayeringProject` path Push uses, and its async ingest
+  (`DuplicateIngestChannelsAsync`) and USDA/hash helpers are unit-tested, but
+  a click-through against a running Remix Toolkit (new prim appears,
+  textures resolve, source material unchanged) has not been user-confirmed.
 - **Live in-Studio smoke test pending** (2026-07-06): the worker export,
   baked-size resolution, two-pass walk, and auto-save are headless-verified,
   but a click-through of Push To Remix from Studio's menu (auto-save → worker

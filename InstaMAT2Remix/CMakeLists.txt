@@ -39,6 +39,7 @@ set(HEADERS
     Logger.h
     InstaMATAPI.h
     InstaMATPluginAPI.h
+    vendor/xxhash.h
 )
 
 # Define the main library
