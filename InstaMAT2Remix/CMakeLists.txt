@@ -19,6 +19,7 @@ set(SOURCES
     GuiManager.cpp
     ExternalTools.cpp
     MeshData.cpp
+    ProjectTemplates.cpp
     SettingsDialog.cpp
     DiagnosticsDialog.cpp
     PluginPaths.cpp
@@ -31,6 +32,8 @@ set(HEADERS
     GuiManager.h
     ExternalTools.h
     MeshData.h
+    PbrChannelMap.h
+    ProjectTemplates.h
     Utils.h
     SettingsDialog.h
     DiagnosticsDialog.h
@@ -52,6 +55,10 @@ target_compile_definitions(InstaMAT2Remix PRIVATE
     INSTAMATPLUGIN_LIB
     _CRT_SECURE_NO_WARNINGS
 )
+# Sources are UTF-8 (em-dashes in user-visible strings); without /utf-8 MSVC
+# assumes the system codepage for both source and execution charsets, which is
+# codepage-dependent and bit the template-chooser dialog once (mojibake).
+target_compile_options(InstaMAT2Remix PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 target_include_directories(InstaMAT2Remix PRIVATE 
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
@@ -86,6 +93,7 @@ add_custom_command(TARGET InstaMAT2Remix POST_BUILD
 add_executable(InstaMAT2RemixExport ExportWorker.cpp)
 target_include_directories(InstaMAT2RemixExport PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(InstaMAT2RemixExport PRIVATE _CRT_SECURE_NO_WARNINGS)
+target_compile_options(InstaMAT2RemixExport PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 add_custom_command(TARGET InstaMAT2RemixExport POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "$<TARGET_FILE:InstaMAT2RemixExport>"
@@ -108,6 +116,7 @@ add_executable(TestRemixConnector
     RemixConnector.cpp
     ExternalTools.cpp
     MeshData.cpp
+    ProjectTemplates.cpp
     Logger.cpp
     PluginPaths.cpp
 )
@@ -116,6 +125,7 @@ target_compile_definitions(TestRemixConnector PRIVATE
     INSTAMATPLUGIN_LIB
     _CRT_SECURE_NO_WARNINGS
 )
+target_compile_options(TestRemixConnector PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 target_link_libraries(TestRemixConnector PRIVATE
     Qt6::Test Qt6::Core Qt6::Network Qt6::Gui Qt6::Widgets
 )

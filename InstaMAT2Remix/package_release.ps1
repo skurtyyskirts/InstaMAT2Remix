@@ -82,9 +82,17 @@ foreach ($pf in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
         ForEach-Object {
             $root = Join-Path $_.FullName "VC\Redist\MSVC"
             if (Test-Path $root) {
+                # Glob Microsoft.VC14*.CRT (VC143 = VS2022, VC145 = VS2026, ...)
+                # and take the newest redist version so the bundled CRT is at
+                # least as new as what the build toolset links against.
                 $cand = Get-ChildItem $root -Directory -ErrorAction SilentlyContinue |
                     Sort-Object Name -Descending |
-                    ForEach-Object { Join-Path $_.FullName "x64\Microsoft.VC143.CRT" } |
+                    ForEach-Object {
+                        Get-ChildItem (Join-Path $_.FullName "x64") -Directory `
+                            -Filter "Microsoft.VC14*.CRT" -ErrorAction SilentlyContinue
+                    } |
+                    Sort-Object Name -Descending |
+                    ForEach-Object { $_.FullName } |
                     Where-Object { Test-Path (Join-Path $_ "vcruntime140.dll") } |
                     Select-Object -First 1
                 if ($cand -and -not $crtSrcDir) { $script:crtSrcDir = $cand }
@@ -95,7 +103,7 @@ if ($crtSrcDir) {
     foreach ($f in $crtDlls) { Copy-Item (Join-Path $crtSrcDir $f) -Destination $PluginStage -Force }
     Write-Host "Bundled MSVC runtime from $crtSrcDir"
 } else {
-    Write-Warning "MSVC runtime (VC143.CRT) not found under any VS redist. The export worker will require the VC++ 2015-2022 x64 redistributable on the target machine."
+    Write-Warning "MSVC runtime (Microsoft.VC14x.CRT) not found under any VS redist. The export worker will require the VC++ x64 redistributable on the target machine."
 }
 
 # 4. Qt runtime via windeployqt — include the compiler runtime for end users

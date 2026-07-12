@@ -8,11 +8,13 @@
 #include <memory>
 #include <QObject>
 #include <QDateTime>
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QMap>
 #include <QSize>
 #include <QString>
+#include <QStringList>
 #include <QVector>
 
 class QProgressDialog;
@@ -103,6 +105,48 @@ namespace InstaMAT2Remix {
         // don't confuse Remix's FileCleanup resultor.
         static QString PreIngestStageDir();
 
+        // Safety gate for directories the plugin wipes with removeRecursively()
+        // (the Export Folder, before every Push). Refuses empty/relative paths
+        // (QDir("") is the process CWD!), drive roots, and well-known user
+        // directories (home, Documents, Desktop, Downloads, Pictures). Pure
+        // path logic, public for QtTest.
+        static bool IsSafeToWipe(const QString& dirPath);
+
+        // --- Full-Remix-PBR push helpers (pure logic, public for QtTest) ---
+
+        // Canonical channel -> Remix ingest TextureTypes enum NAME. "normal"
+        // resolves via normalEncoding ("dx"|"ogl"|"oth" -> NORMAL_DX/OGL/OTH,
+        // anything else -> NORMAL_DX); unknown channels resolve to OTHER
+        // (raw colorspace — the safe default for unrecognized data).
+        static QString ResolveIngestValidationType(const QString& pbrType,
+                                                   const QString& normalEncoding);
+
+        // What kind of AperturePBR material the linked prim is, judged from
+        // its texture attr names (GET /textures response). Opaque and
+        // Translucent consume different shader inputs; Unknown is treated as
+        // Opaque by callers.
+        enum class RemixMaterialKind { Opaque, Translucent, Unknown };
+        static RemixMaterialKind ClassifyMaterialFromTextureAttrs(const QStringList& usdAttrs);
+
+        // Builds the PUT /stagecraft/textures/ pairs [[usdAttr, ddsPath],...]
+        // from canonical-channel -> ingested-path, routing each channel to the
+        // shader input the target material kind actually consumes (channels
+        // with no input for that kind are skipped; outSkipped lists them).
+        static QJsonArray BuildTexturePutPairs(const QString& materialPrim,
+                                               const QHash<QString, QString>& ingestedPaths,
+                                               bool translucent,
+                                               QStringList* outSkipped = nullptr);
+
+        // Remix reads opacity from the diffuse texture's ALPHA channel (it has
+        // no consumed opacity_texture input). Merges opacity's grayscale into
+        // albedo's alpha and writes a new PNG next to albedoPath (always .png:
+        // jpg drops alpha, tga writing is unsupported by QImage). Returns
+        // false with outErr on failure.
+        static bool MergeOpacityIntoAlbedoAlpha(const QString& albedoPath,
+                                                const QString& opacityPath,
+                                                QString&       outMergedPngPath,
+                                                QString&       outErr);
+
         // Returns the default Studio layer-project directory:
         // %USERPROFILE%/Documents/InstaMAT/Library. The recipe's "New Project"
         // dialog saves unsaved Layering projects here, so Push tails this
@@ -128,6 +172,33 @@ namespace InstaMAT2Remix {
         // Documents/InstaMAT2Remix/MeshCache/<mesh-stem>/. Pure path
         // computation, public for QtTest.
         static QString MeshCacheDirFor(const QString& meshPath);
+
+        // --- Export-worker stdout protocol (pure parsing, public for QtTest) ---
+
+        // Everything the plugin extracts from one worker run's merged stdout.
+        // protocolLines/engineTail are returned instead of logged so the
+        // parser stays a pure function.
+        struct WorkerRunParse {
+            QStringList channelFiles;    // CHANNEL=<canonical>:<filename>
+            bool collapsed = false;      // COLLAPSED=1
+            QString finalSize;           // FINALSIZE=<WxH>
+            QString graphType;           // GRAPHTYPE=<layer|element|materialize>
+            QString error;               // last ERROR=<message>
+            QString fatalReason;         // FATAL=<usage|environment|project|outputs>
+            QString fallbackOutputName;  // OUTPUTFALLBACK name='<name>' canonical=albedo
+            QStringList protocolLines;   // every IM2RX payload, in order (for the log)
+            QStringList engineTail;      // last 15 non-protocol lines (engine noise)
+        };
+        static WorkerRunParse ParseWorkerStdout(const QString& mergedOutput);
+
+        // A worker failure without FATAL= may be the per-process render race —
+        // worth a fresh-process retry. FATAL failures are deterministic and
+        // must fail the push after a single spawn.
+        static bool ShouldRetryWorkerFailure(const QString& fatalReason);
+
+        // Actionable dialog tip for a FATAL reason ("outputs" -> rename your
+        // graph outputs after PBR channels); empty for everything else.
+        static QString WorkerErrorTip(const QString& fatalReason);
 
     private:
         InstaMAT::IInstaMAT& m_instaMAT;
@@ -164,6 +235,15 @@ namespace InstaMAT2Remix {
         // --- Import/Export helpers ---
         QString GetPulledTexturesDir(const QString& remixDefaultDirAbs) const;
         QString DeriveProjectNameFromRemixDir(const QString& remixDefaultDirAbs) const;
+
+        // Materialize Image pull: downloads the linked material's current
+        // texture (albedo preferred, transmittance for glass) into the Pulled
+        // Textures dir under a material-specific filename, registers the
+        // folder as an external asset folder, and returns the absolute path
+        // for the New Project wizard to select.
+        bool PrepareMaterializeSourceImage(const QString& materialPrim,
+                                           QString&       outImageAbs,
+                                           QString&       outErr);
 
         // Walks Remix's /stagecraft/assets/<mat>/textures response and writes each
         // texture into destDir. DDS sources are routed through texconv via
@@ -211,9 +291,10 @@ namespace InstaMAT2Remix {
         // reachable DDS header); invalid QSize when unknown.
         QSize QueryOriginalTextureSize() const;
 
-        // Export resolution policy: Auto (0) → original Remix texture dims;
-        // fixed value → aspect-corrected against the original when
-        // RestoreAspectOnExport is on; final fallback 2048x2048.
+        // Export resolution policy: Auto (0) → QSize(0,0) sentinel (the worker
+        // renders at the project's BAKED resolution from BakeSettings); fixed
+        // value → aspect-corrected against the original Remix texture when
+        // RestoreAspectOnExport is on; worker falls back to 2048x2048.
         QSize ComputePushExportSize() const;
 
         static QString NormalizePathSlashes(const QString& path);
@@ -226,9 +307,20 @@ namespace InstaMAT2Remix {
         std::string m_linkedMeshPath;
 
         // Set by ExportActiveLayeringProject for the Push summary: whether the
-        // last export still had 1x1-collapsed channels after all retries, and
-        // the resolution the worker actually rendered at (e.g. "4096x4096").
+        // last export still had 1x1-collapsed channels after all retries, the
+        // resolution the worker actually rendered at (e.g. "4096x4096"), and a
+        // warning when the executed graph's type doesn't match the linked
+        // project template (newest-.IMP discovery can pick up a different
+        // project than the one Pull created).
         bool m_exportHadCollapse = false;
         QString m_lastExportSize;
+        QString m_exportGraphTypeNote;
+        QString m_exportAlbedoFallbackNote;
+
+        // Reentrancy guard: Pull/Import/Push pump the event loop (nested
+        // QEventLoop in RequestJson, QProcess waits, the recipe), so a second
+        // menu click can arrive mid-flow. Entry points check-and-set this and
+        // bail with a "still running" notice instead of interleaving.
+        bool m_operationInProgress = false;
     };
 }

@@ -1,7 +1,7 @@
 # Experimental release workflow.
 #
 # Manual-trigger only (workflow_dispatch) so it does NOT auto-fire when you push
-# a v* tag — the v0.0.1-alpha release is built and verified locally (see docs/PUBLISH.md).
+# a v* tag — releases are built and verified locally (see docs/PUBLISH.md).
 #
 # CAVEAT: package_release.ps1 bundles the MSVC runtime by searching this machine's
 # VS redist dirs (…\VC\Redist\MSVC\…\Microsoft.VC143.CRT). A hosted runner's VS
@@ -16,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version tag to release (e.g. v0.0.1-alpha). Leave blank to use PluginInfo.h."
+        description: "Version tag to release (e.g. v0.0.2-alpha). Leave blank to use PluginInfo.h."
         required: false
         default: ""
   # push:

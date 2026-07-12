@@ -8,6 +8,66 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 _Nothing yet._
 
+## [0.0.2-alpha] - 2026-07-12
+
+Second alpha. Pull grows a project-template chooser, Push covers the full RTX
+Remix PBR input set (and now works from all three project templates), and two
+user-reported bugs are fixed: the Element Graph push failure and the garbled
+text in the Pull chooser.
+
+### Added
+
+- **Pull project templates**: choose **Asset Texturing** (default), **Element
+  Graph**, or **Materialize Image** on every Pull — with "remember my choice"
+  and a Settings > Pull > Project Template override. Element Graph uses a
+  pickerless auto-create recipe; Materialize Image downloads the material's
+  current texture and feeds it to the wizard automatically.
+- **Full Remix PBR push set**: subsurface scattering (transmittance /
+  thickness / single-scattering / radius) and anisotropy channels; translucent
+  (glass) target materials are detected and receive only the channels they
+  consume; opacity is merged into the albedo alpha (Remix reads opacity from
+  there); a Normal-map encoding setting (DirectX / OpenGL / Octahedral).
+- **Push from any template**: the render worker now executes layer, element,
+  or materialize graphs (previously layer projects only).
+- **Element Graph push conveniences**: a graph whose single image output has a
+  generic name (e.g. "Output") is pushed as the Base Color map with a summary
+  note — matching how InstaMAT's own Blender add-on treats generic outputs.
+  Output names "Output"/"Default", "Metal" and "Transparency" now map to
+  albedo, metallic and opacity respectively.
+- Blender auto-unwrap now imports OBJ, USD, FBX and glTF meshes and tolerates
+  both old and new Blender `smart_project` APIs.
+
+### Fixed
+
+- **Element Graph push failed with "no recognized PBR channel outputs"**: the
+  worker now reports every output it saw (`OUTPUTCOUNT`/`OUTPUTSKIP`), tells
+  you exactly which names it found and what to rename them to, and the plugin
+  fails fast (one worker spawn instead of three, saving ~24 s) on this and
+  other deterministic errors via the new `FATAL=` protocol line.
+- **Garbled text in the Pull template chooser** ("â " instead of an em-dash):
+  config strings are now decoded as UTF-8, and all targets compile with MSVC
+  `/utf-8` so text stops depending on the system codepage.
+- **Push-failure dialog polish**: no more doubled period, clearer layout, and
+  an actionable "name your outputs after PBR channels" tip when that is the fix.
+- **Empty Export Folder setting no longer wipes the working directory**: every
+  recursive delete is gated by the unit-tested `IsSafeToWipe` (refuses empty/
+  relative paths, drive roots, and well-known user folders).
+- Menu clicks during a running Pull/Import/Push no longer interleave flows
+  (reentrancy guard).
+- Materialize Image pull no longer fails intermittently with "Asset … not
+  found in asset list": the picker now waits for Studio's asynchronous asset
+  scan and re-checks the list before giving up.
+- Installer: resolves OneDrive-redirected Documents, warns when Studio is
+  running, and keeps its window open; packaging finds the VS 2026 (VC145)
+  runtime for app-local bundling.
+
+### Changed
+
+- **Render-collapse handling is now a hard guard**: when no clean render can be
+  obtained after fresh-worker retries and step-downs, the push **aborts** with
+  nothing ingested and Remix untouched (0.0.1 pushed the degraded textures and
+  only warned in the summary).
+
 ## [0.0.1-alpha] - 2026-07-07
 
 First public **alpha** release — the InstaMAT counterpart of the Substance2Remix
@@ -52,5 +112,6 @@ works end-to-end, but expect rough edges — please report issues.
 - Imported textures must be dragged onto their channels manually (the SDK has no
   auto-assign API).
 
-[Unreleased]: https://github.com/skurtyyskirts/InstaMAT2Remix/compare/v0.0.1-alpha...HEAD
+[Unreleased]: https://github.com/skurtyyskirts/InstaMAT2Remix/compare/v0.0.2-alpha...HEAD
+[0.0.2-alpha]: https://github.com/skurtyyskirts/InstaMAT2Remix/releases/tag/v0.0.2-alpha
 [0.0.1-alpha]: https://github.com/skurtyyskirts/InstaMAT2Remix/releases/tag/v0.0.1-alpha

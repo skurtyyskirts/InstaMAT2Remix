@@ -43,14 +43,19 @@ The installer only copies files into your user folders — you can do the same
 by hand. Close InstaMAT Studio, then:
 
 1. Copy the whole **`plugin`** folder into
-   `%USERPROFILE%\Documents\InstaMAT\Plugins\` and rename the copy to
+   `Documents\InstaMAT\Plugins\` and rename the copy to
    **`InstaMAT2Remix`** (so you have
    `…\Documents\InstaMAT\Plugins\InstaMAT2Remix\` with the DLL/exe inside).
 2. Copy **`plugin\InstaMAT2RemixPlugin.dll`** into the `Plugins` folder itself
-   (`%USERPROFILE%\Documents\InstaMAT\Plugins\InstaMAT2RemixPlugin.dll`).
+   (`Documents\InstaMAT\Plugins\InstaMAT2RemixPlugin.dll`).
 3. Copy **`InstaMAT2Remix.IMP`** into
-   `%USERPROFILE%\Documents\InstaMAT\Library\` (create it if missing) — this
+   `Documents\InstaMAT\Library\` (create it if missing) — this
    `.IMP` is what makes Studio load the plugin.
+
+> **OneDrive note:** "Documents" means the folder Windows/Studio actually use.
+> If your Documents folder is redirected to OneDrive (the Windows 11 default),
+> that is `OneDrive\Documents` — not `C:\Users\<you>\Documents`. The install
+> script resolves this automatically.
 
 Start Remix then Studio. To uninstall manually, delete those same three items.
 
@@ -58,9 +63,9 @@ Start Remix then Studio. To uninstall manually, delete those same three items.
 
 | Menu action | What it does |
 |---|---|
-| **Pull From Remix** | Reads your current Remix selection, resolves its mesh + material, and automatically creates a new InstaMAT project from the mesh — zero prompts. The project is "linked" to the Remix material. |
+| **Pull From Remix** | Reads your current Remix selection, resolves its mesh + material, and automatically creates a new InstaMAT project linked to the Remix material. A chooser lets you pick the project template — **Asset Texturing** (paint on the mesh, default), **Element Graph** (node pipeline; name outputs Base Color/Roughness/… so Push finds them), or **Materialize Image** (the material's current Remix texture is downloaded and loaded as the image to materialize). Tick "Remember my choice" to make Pull zero-prompt again (change later in Settings > Pull). |
 | **Import Textures from Remix** | Downloads the linked material's current textures (converted DDS→PNG with canonical names like `albedo.png`) into `Documents\InstaMAT2Remix\Pulled Textures\<project>\`, registers the folder in InstaMAT's Asset Browser, and opens it in Explorer. Drag each map onto the matching channel — InstaMAT's plugin SDK has no API to auto-assign them. |
-| **Push To Remix** | Renders your painted project's outputs (albedo/normal/roughness/metallic/height/…), ingests them into your Remix project, points the linked material at the new textures, and saves the Remix layer. It **auto-saves your project first**, and by default exports at the resolution you **baked** the project at (bake at 4K → push 4K). Rendering runs in a separate helper process so it can never crash Studio. |
+| **Push To Remix** | Renders your project's outputs and ingests them into your Remix project, points the linked material at the new textures, and saves the Remix layer. **All texture types RTX Remix supports are pushed**: albedo, normal, roughness, metallic, emissive, height, plus **subsurface scattering** (transmittance / thickness / single-scattering / radius — name outputs e.g. "Transmittance", "Thickness", "SSS") and anisotropy. Opacity is merged into albedo's alpha (that's where Remix reads it). Glass (translucent) materials automatically get only the channels they support. It **auto-saves your project first**, by default exports at the resolution you **baked** at, and works from all three project templates. Rendering runs in a separate helper process so it can never crash Studio. |
 | **Force Push to Remix** | Like Push, but relinks to whatever material is currently selected in Remix and writes the textures under a fresh, non-overwriting filename root (`<hash>_1`, `_2`, …). |
 | **Settings...** | Connection (URL, timeout, Test Connection), Paths (texconv, Blender, export folder, Remix output subfolder, log), Pull (tiling mesh, auto-unwrap), Export (format, resolution, opacity map, aspect restore), Advanced (log level, Smart-UV parameters). |
 | **Diagnostics...** | One-click health report: versions, path checks (OK/MISSING), settings, link state, live Remix connectivity. Copy to Clipboard for bug reports. |
@@ -81,12 +86,25 @@ Start Remix then Studio. To uninstall manually, delete those same three items.
 - **Export resolution**: with *Export Resolution* set to **Auto** (the
   default), Push renders at the resolution you baked the project at — so bake
   at 4K to push 4K. Pick a fixed size in Settings > Export to override.
+  (Element Graph / Materialize projects have no bake settings — Auto uses
+  2048; pick a fixed size to override.)
+- **Subsurface scattering & co.**: output names are matched flexibly
+  ("Transmittance"/"Transmission"/"Translucency", "SSS"/"Subsurface
+  Scattering"/"Single Scattering", "Thickness"/"Measurement Distance",
+  "Subsurface Radius", "Anisotropy"). SSS renders in Remix once its runtime
+  SSS/skin option is enabled; the anisotropy *texture* is pushed but current
+  Remix runtimes read the material's anisotropy constant. AO has no Remix
+  texture input — it's exported to disk but not pushed.
 - **Close GPU-heavy apps before a big Push**: the InstaMAT renderer has an
   intermittent glitch (worse when a game or other GPU-heavy app is running,
   or right after a long session) where some channels come out as a 1×1 pixel.
-  The plugin automatically retries a few times and will **warn you in the Push
-  summary** if it couldn't get a clean render. If you see that warning, close
-  other GPU apps (and reboot if it keeps happening) and Push again.
+  The plugin automatically retries with fresh render processes; if it still
+  can't get a clean render it **stops the push and leaves your Remix textures
+  untouched** (it never overwrites good textures with blank ones). Close other
+  GPU apps (and reboot if it keeps happening) and Push again.
+- **Pull replaces the current project without asking**: like Substance2Remix,
+  Pull is zero-prompt — it discards unsaved changes in the currently open
+  project to create the new one. Save your work before pulling.
 - **Auto-save**: Push saves your project before rendering. If it can't find
   Studio's Save action it falls back to asking you to press Ctrl+S and Retry.
 - **Project type**: on some InstaMAT Studio versions the automated New Project
@@ -102,10 +120,17 @@ Start Remix then Studio. To uninstall manually, delete those same three items.
 - **"Could not determine Remix project directory" / connection errors**: make
   sure Remix Toolkit is running with a project open and its REST API on port
   8011. Use Settings > Connection > *Test Connection*.
-- **Push summary says some channels rendered at 1×1**: a GPU-driver race in
-  the InstaMAT renderer (see the note above). Close other GPU-heavy apps,
-  reboot if it persists, and Push again. Textures that rendered correctly are
-  still pushed.
+- **"Push stopped to protect your Remix textures"**: a GPU-driver race in
+  the InstaMAT renderer produced blank 1×1 output (see the note above).
+  Nothing in Remix was changed. Close other GPU-heavy apps, reboot if it
+  persists, and Push again.
+- **Element Graph push fails with "…is named after a PBR channel" or "exposes
+  no output parameters"**: Push exports your graph's **output parameters**, so
+  expose outputs on the graph and name each after the PBR channel it holds
+  (Base Color, Roughness, Metallic, Normal, Height, Emissive, Opacity, Ambient
+  Occlusion), save (Ctrl+S), and push again. A graph whose **single** image
+  output has a generic name (e.g. "Output") is pushed as Base Color
+  automatically, with a note in the push summary.
 - **Push fails with "Live export failed" / "Could not execute the layer
   project"**: check `Documents\InstaMAT2Remix\logs\remix_connector.log` for
   the `ExportWorker:` lines. Confirm InstaMAT Studio is activated (the helper

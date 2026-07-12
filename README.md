@@ -16,9 +16,9 @@ It is the InstaMAT counterpart of the
 Adobe Substance Painter, and behaves 1:1 with it. Rendering happens in a
 separate helper process, so a Push can never crash Studio.
 
-> ⚠️ **Early alpha (v0.0.1-alpha) — this is a first public release.** It works,
-> but expect rough edges and bugs. If something misbehaves, please open an issue
-> with your **Diagnostics → Copy to Clipboard** output. Feedback is very welcome.
+> ⚠️ **Early alpha (v0.0.2-alpha).** It works, but expect rough edges and bugs.
+> If something misbehaves, please open an issue with your
+> **Diagnostics → Copy to Clipboard** output. Feedback is very welcome.
 
 <!--
   Drop screenshots into docs/images/ and uncomment. A menu shot and a
@@ -72,9 +72,9 @@ plus a manual, no-script install path. To remove the plugin later, run
 
 | Menu action | What it does |
 |---|---|
-| **Pull From Remix** | Reads your Remix selection, resolves its mesh + material, and auto-creates a linked InstaMAT project from the mesh. Zero prompts. |
+| **Pull From Remix** | Reads your Remix selection, resolves its mesh + material, and auto-creates a linked InstaMAT project — choose **Asset Texturing** (default), **Element Graph**, or **Materialize Image** (the material's Remix texture is downloaded and loaded as the source image). "Remember my choice" restores zero-prompt pulls. |
 | **Import Textures from Remix** | Downloads the linked material's textures (DDS→PNG, canonical names) into `Documents\InstaMAT2Remix\Pulled Textures\<project>\`, registers the folder, and opens Explorer. Drag each map onto the matching channel. |
-| **Push To Remix** | Auto-saves → renders PBR outputs at the baked resolution → ingests → retargets the linked material → saves the Remix layer. Renders out-of-process. |
+| **Push To Remix** | Auto-saves → renders PBR outputs at the baked resolution → ingests → retargets the linked material → saves the Remix layer. Pushes **every texture type Remix supports** — incl. subsurface scattering (transmittance/thickness/single-scattering/radius) and anisotropy; opacity is merged into albedo's alpha; glass materials get only their supported channels. Renders out-of-process. |
 | **Force Push to Remix** | Like Push, but relinks to the currently selected Remix material and writes under a fresh, non-overwriting filename root. |
 | **Settings…** | Connection / Paths / Pull / Export / Advanced. |
 | **Diagnostics…** | One-click health report (versions, path checks, link state, live connectivity), Copy to Clipboard. |
@@ -94,16 +94,23 @@ plus a manual, no-script install path. To remove the plugin later, run
 - **Intermittent 1×1 render collapse under GPU load.** The InstaMAT standalone
   renderer occasionally emits a 1×1 map for some channels, especially when
   another GPU-heavy app is running. The plugin automatically retries with fresh
-  worker processes and **warns you in the Push summary** if it couldn't get a
-  clean render — close other GPU apps (reboot if it persists) and Push again.
+  worker processes; if none renders clean it **stops the push and leaves your
+  Remix textures untouched** — close other GPU apps (reboot if it persists)
+  and Push again.
 - **Single selected mesh only.** Multi-mesh material-group bundling on Pull
   (present in Substance2Remix) is not yet ported.
 - **Import is reference-only.** InstaMAT's plugin SDK has no API to auto-assign
   textures into an open project, so imported maps must be dragged onto their
   channels manually.
-- **Live in-Studio Push** has been verified headlessly; a full click-through on
-  every machine configuration is still being validated by the community — please
-  file an issue with your Diagnostics output if anything misbehaves.
+- **Element Graph pushes read your graph output parameters** — name them after
+  PBR channels (Base Color, Roughness, Normal, …). A single generically-named
+  image output is pushed as Base Color with a note.
+- **Live in-Studio smoke** (2026-07-12): Asset Texturing pull + full push,
+  Element Graph pull + push (incl. the lone-output Base Color fallback), and
+  Materialize Image pull + full push are user-verified end-to-end. Remaining
+  paths (SSS/glass pushes, opacity-merge visual check) are still being
+  validated by the community — please file an issue with your Diagnostics
+  output if anything misbehaves.
 
 ## Building from source
 
@@ -137,8 +144,8 @@ python -m pytest InstaMAT2Remix/tests/ -v     # from the repo root
 - **RTX Remix Connector > Diagnostics…** gives a one-click health report
   (paths, settings, live Remix connectivity) with Copy to Clipboard.
 - **Settings > Connection > Test Connection** verifies the Remix REST API.
-- **Push says some channels rendered at 1×1** — see *Known limitations*; close
-  GPU-heavy apps and Push again. Correctly rendered channels are still pushed.
+- **"Push stopped to protect your Remix textures"** — see *Known limitations*;
+  close GPU-heavy apps and Push again. Nothing in Remix was changed.
 - **"Live export failed"** — check the `ExportWorker:` lines in the log and
   confirm InstaMAT Studio is activated (the helper renders through the license).
 

@@ -1,14 +1,45 @@
 # WBC ↔ InstaMAT2Remix feature-parity audit
 
-Re-baselined **2026-07-06** against the v0.0.1-alpha parity work (zero-prompt Pull,
-live-export Push via the out-of-process `InstaMAT2RemixExport.exe` worker,
-Export settings tab, Force Push root renaming, release packaging). The
+Re-baselined **2026-07-12** against the v0.0.2-alpha work (Pull project-template
+chooser, full Remix PBR push set incl. SSS/anisotropy/glass routing, Element
+Graph push diagnostics + albedo fallback, live-export Push via the
+out-of-process `InstaMAT2RemixExport.exe` worker, Export settings tab, Force
+Push root renaming, release packaging). The
 reference plugin is
 WholeBodyCapture ("Substance2Remix") for Adobe Substance Painter at
 `c:\Users\skurtyy\Documents\Adobe\Adobe Substance 3D Painter\python\plugins\WholeBodyCapture\`
 (reference-only — never modified).
 
 Legend: ✅ parity | 🟨 parity with an intentional platform deviation | ➕ InstaMAT-only superset
+
+## 2026-07-12 deliberate deviations (user-requested superset)
+
+These are **intentional departures** from strict WBC behavior:
+
+1. **Pull project templates** ➕ — Pull offers Asset Texturing (default) /
+   Element Graph / Materialize Image via a chooser dialog with
+   "remember my choice" (Settings > Pull > Project Template on Pull; "Ask
+   each time" default). WBC always creates one Painter project kind. The
+   zero-prompt behavior returns once a choice is remembered.
+   Materialize Image auto-downloads the linked material's texture and the
+   wizard selects it (`PrepareMaterializeSourceImage`).
+2. **Full Remix PBR set on Push** ➕ — WBC pushes 7 channels; we push
+   albedo/normal/roughness/metallic/emissive/height plus transmittance,
+   sss_thickness, sss_scattering, sss_radius, anisotropy (see
+   `kDefaultPbrSpecs`, ground-truthed against dxvk-remix's AperturePBR MDLs
+   and toolkit-remix's ingest TextureTypes enum). Translucent (glass)
+   targets are detected (`ClassifyMaterialFromTextureAttrs`) and get only
+   transmittance/emissive/normal, routed to the right shader inputs.
+3. **Opacity correctness fix** 🟨 — WBC pushes a separate `opacity_texture`
+   with an `OPACITY` ingest type; **neither exists in current Remix** (the
+   runtime reads opacity from the diffuse texture's alpha, and the
+   mass-validator rejects unknown type names). We merge opacity into
+   albedo's alpha (`MergeOpacityIntoAlbedoAlpha`) under the same
+   `IncludeOpacityMap` key. WBC's `AO` ingest type is equally invalid —
+   ao is exported to disk but not pushed.
+4. **Push from Element/Materialize graphs** ➕ — the worker executes
+   layer → element → materialize graph tiers (WBC has no equivalent), plus
+   a `NormalMapEncoding` setting (DX/OGL/Octahedral ingest types).
 
 ## Menu surface
 
@@ -121,7 +152,7 @@ automation must run on the UI thread anyway.
 
 - RTX Remix Element node (graph-triggerable Pull/Import), C-ABI exports,
   optional Python bridge (`rtx_remix_connector.py`, env-gated)
-- QtTest suite (16 cases) + pytest suite (5) + CI
+- QtTest suite (27 test functions, 29 totals with init/cleanup) + pytest suite (5) + CI
 - Release packaging: `package_release.ps1` → installable zip with
   `install.ps1`/`uninstall.ps1`, self-contained `.IMP` generation
   (`tools/imp_packaging.ps1` — no template file needed)

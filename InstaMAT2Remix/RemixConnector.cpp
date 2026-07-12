@@ -1,7 +1,9 @@
 #include "RemixConnector.h"
 #include "MeshData.h"
+#include "PbrChannelMap.h"
 #include "PluginInfo.h"
 #include "PluginPaths.h"
+#include "ProjectTemplates.h"
 
 #include <QApplication>
 #include <QAbstractButton>
@@ -23,6 +25,7 @@
 #include <QJsonParseError>
 #include <QGuiApplication>
 #include <QHash>
+#include <QImage>
 #include <QImageReader>
 #include <QKeySequence>
 #include <QLabel>
@@ -72,44 +75,67 @@ namespace InstaMAT2Remix {
             "textures", "painterconnector_ingested", "painterconnector-ingested", "ingested",
             "captures", "capture", "assets", "output", "export", "exports"};
 
+        // Canonical PBR channel -> AperturePBR shader input, per material kind.
+        // Ground truth: dxvk-remix AperturePBR_Opacity.mdl /
+        // AperturePBR_Translucent.mdl (2026-07-12 research). An empty input
+        // means that material kind has NO consumed texture input for the
+        // channel — the push skips it (with a summary note) instead of
+        // authoring a dead attribute. There is deliberately NO row for
+        // opacity (Remix reads opacity from the diffuse texture's ALPHA — the
+        // push merges opacity.png into albedo's alpha), nor for ao/ior
+        // (AperturePBR has no such texture inputs).
         struct PbrSpec {
             QString pbrType;
-            QString mdlInput;
-            bool sRGB;
-            int bits;
+            QString mdlInputOpaque;
+            QString mdlInputTranslucent;
         };
 
         const QList<PbrSpec> kDefaultPbrSpecs = {
-            {"albedo", "diffuse_texture", true, 8},
-            {"normal", "normalmap_texture", false, 8},
-            {"roughness", "reflectionroughness_texture", false, 8},
-            {"metallic", "metallic_texture", false, 8},
-            {"emissive", "emissive_mask_texture", true, 8},
-            {"height", "height_texture", false, 16},
-            {"opacity", "opacity_texture", false, 8},
-            {"ao", "ao_texture", false, 8},
-            {"transmittance", "transmittance_texture", true, 8},
-            {"ior", "ior_texture", false, 8},
-            {"subsurface", "subsurface_texture", true, 8},
+            {"albedo",         "diffuse_texture",                      ""},
+            {"normal",         "normalmap_texture",                    "normalmap_texture"},
+            {"roughness",      "reflectionroughness_texture",          ""},
+            {"metallic",       "metallic_texture",                     ""},
+            {"emissive",       "emissive_mask_texture",                "emissive_mask_texture"},
+            {"height",         "height_texture",                       ""},
+            // "transmittance" is dual-routed: opaque materials take it as the
+            // SSS transmittance color; translucent (glass) materials as the
+            // transmittance/albedo color.
+            {"transmittance",  "subsurface_transmittance_texture",     "transmittance_texture"},
+            {"sss_thickness",  "subsurface_thickness_texture",         ""},
+            // NOTE: the texture input is ..._single_scattering_texture — the
+            // "_albedo" spelling only exists for the scalar constant.
+            {"sss_scattering", "subsurface_single_scattering_texture", ""},
+            {"sss_radius",     "subsurface_radius_texture",            ""},
+            // Valid input + ingest type, but the runtime currently reads the
+            // scalar anisotropy constant; pushed anyway with a summary caveat.
+            {"anisotropy",     "anisotropy_texture",                   ""},
         };
 
         // NOTE: the Studio-output-name → canonical-PBR-channel mapping
-        // ("Base Color" → albedo, …) lives in ExportWorker.cpp
-        // (MapStudioOutputToCanonicalPbr) — the out-of-process exporter is the
-        // only place layer-graph outputs are walked now.
+        // ("Base Color" → albedo, …) lives in PbrChannelMap.h
+        // (MapStudioOutputToCanonicalPbr), shared with the out-of-process
+        // exporter — the only place graph outputs are walked.
 
+        // Canonical channel -> RTX Remix ingest TextureTypes enum NAME. The
+        // mass-validator accepts exactly these 13 names (toolkit-remix
+        // omni.flux.asset_importer.core data_models/enums.py): DIFFUSE,
+        // ROUGHNESS, ANISOTROPY, METALLIC, EMISSIVE, NORMAL_OGL, NORMAL_DX,
+        // NORMAL_OTH, HEIGHT, TRANSMITTANCE, MEASUREMENT_DISTANCE,
+        // SINGLE_SCATTERING, OTHER. (The old AO/OPACITY/IOR/SUBSURFACE
+        // strings inherited from WBC were never valid.) "normal" is resolved
+        // dynamically by ResolveIngestValidationType from the
+        // NormalMapEncoding setting.
         const QHash<QString, QString> kPbrToIngestValidation = {
-            {"albedo", "DIFFUSE"},
-            {"normal", "NORMAL_DX"},
-            {"height", "HEIGHT"},
-            {"roughness", "ROUGHNESS"},
-            {"metallic", "METALLIC"},
-            {"emissive", "EMISSIVE"},
-            {"ao", "AO"},
-            {"opacity", "OPACITY"},
-            {"transmittance", "TRANSMITTANCE"},
-            {"ior", "IOR"},
-            {"subsurface", "SUBSURFACE"},
+            {"albedo",         "DIFFUSE"},
+            {"height",         "HEIGHT"},
+            {"roughness",      "ROUGHNESS"},
+            {"metallic",       "METALLIC"},
+            {"emissive",       "EMISSIVE"},
+            {"transmittance",  "TRANSMITTANCE"},
+            {"sss_thickness",  "MEASUREMENT_DISTANCE"},
+            {"sss_scattering", "SINGLE_SCATTERING"},
+            {"sss_radius",     "OTHER"},
+            {"anisotropy",     "ANISOTROPY"},
         };
 
         // Mirror of WBC remix_api.py:21-29 REMIX_ATTR_SUFFIX_TO_PBR_MAP.
@@ -137,6 +163,15 @@ namespace InstaMAT2Remix {
             {"opacitymask_texture",         "opacity"},
             {"opacity",                     "opacity"},
             {"transparency_texture",        "opacity"},
+            // --- Remix SSS / translucency extension (deliberate deviation
+            // from the WBC lock-step table above; suffixes verified against
+            // dxvk-remix's AperturePBR MDLs 2026-07-12) ---
+            {"transmittance_texture",              "transmittance"},
+            {"subsurface_transmittance_texture",   "transmittance"},
+            {"subsurface_thickness_texture",       "sss_thickness"},
+            {"subsurface_single_scattering_texture","sss_scattering"},
+            {"subsurface_radius_texture",          "sss_radius"},
+            {"anisotropy_texture",                 "anisotropy"},
         };
 
         QString NormalizeSpacesUnderscoresLower(QString s) {
@@ -144,6 +179,43 @@ namespace InstaMAT2Remix {
             s.replace(' ', "");
             s.replace('_', "");
             return s;
+        }
+
+        // Maps a Remix *instance* prim path to its mesh *definition* prim
+        // (/instances/inst_<HASH> -> /meshes/mesh_<HASH>), which is what the
+        // /material and /file-paths endpoints answer for. Shared by Pull and
+        // by the material-from-selection fallback (Import / Force Push).
+        QString ExtractMeshDefinitionPath(const QString& primPath) {
+            const QString p = QString(primPath).replace('\\', '/');
+            static const QRegularExpression re1(
+                R"(^(.*)/instances/inst_([A-Z0-9]{16}(?:_[0-9]+)?)(?:_[0-9]+)?(?:/.*)?$)");
+            const auto m1 = re1.match(p);
+            if (m1.hasMatch())
+                return QString("%1/meshes/mesh_%2").arg(m1.captured(1), m1.captured(2));
+
+            static const QRegularExpression re2(
+                R"(^(.*(?:/meshes|/Mesh|/Geom)/mesh_[A-Z0-9]{16}(?:_[0-9]+)?)(?:/.*)?$)");
+            const auto m2 = re2.match(p);
+            if (m2.hasMatch()) return m2.captured(1);
+
+            return {};
+        }
+
+        // RAII busy-flag for the reentrancy guard.
+        struct BusyGuard {
+            bool& flag;
+            explicit BusyGuard(bool& f) : flag(f) { flag = true; }
+            ~BusyGuard() { flag = false; }
+        };
+
+        // True when a second menu action arrived while a flow is running;
+        // shows the notice and tells the caller to bail.
+        bool WarnIfBusy(bool busy) {
+            if (!busy) return false;
+            QMessageBox::information(nullptr, kPluginName,
+                "Another RTX Remix Connector operation is still running.\n\n"
+                "Wait for it to finish, then try again.");
+            return true;
         }
 
         QString DefaultLogFilePath() {
@@ -469,26 +541,36 @@ namespace InstaMAT2Remix {
                                           const QString& filenameWithExt,
                                           const QString& filenameNoExt) {
             if (!list) return false;
-            auto match = [&](const QString& itemText) {
-                if (itemText.compare(filenameWithExt, Qt::CaseInsensitive) == 0) return true;
-                if (!filenameNoExt.isEmpty() &&
-                    itemText.compare(filenameNoExt, Qt::CaseInsensitive) == 0) return true;
-                if (!filenameNoExt.isEmpty() &&
-                    itemText.contains(filenameNoExt, Qt::CaseInsensitive)) return true;
+            // Match in strict precedence passes: exact filename, exact stem,
+            // then substring. A single-pass per-item check let an early item
+            // that merely CONTAINS the stem ("chair_old") win over a later
+            // exact match ("chair") and silently picked the wrong mesh.
+            QListWidgetItem* hit = nullptr;
+            int hitRow = -1;
+            auto findBy = [&](const std::function<bool(const QString&)>& pred) {
+                for (int i = 0; i < list->count(); ++i) {
+                    QListWidgetItem* it = list->item(i);
+                    if (it && pred(it->text())) { hit = it; hitRow = i; return true; }
+                }
                 return false;
             };
-            for (int i = 0; i < list->count(); ++i) {
-                QListWidgetItem* it = list->item(i);
-                if (!it) continue;
-                if (match(it->text())) {
-                    // QListWidget::itemActivated is a protected signal — emit via meta call.
-                    const bool ok = QMetaObject::invokeMethod(
-                        list, "itemActivated", Qt::DirectConnection,
-                        Q_ARG(QListWidgetItem*, it));
-                    qInfo().noquote() << "[InstaMAT2Remix] Asset list match: row" << i
-                        << "text='" << it->text() << "' invoked itemActivated ->" << ok;
-                    return ok;
-                }
+            findBy([&](const QString& t) {
+                return t.compare(filenameWithExt, Qt::CaseInsensitive) == 0;
+            })
+            || (!filenameNoExt.isEmpty() && findBy([&](const QString& t) {
+                    return t.compare(filenameNoExt, Qt::CaseInsensitive) == 0;
+                }))
+            || (!filenameNoExt.isEmpty() && findBy([&](const QString& t) {
+                    return t.contains(filenameNoExt, Qt::CaseInsensitive);
+                }));
+            if (hit) {
+                // QListWidget::itemActivated is a protected signal — emit via meta call.
+                const bool ok = QMetaObject::invokeMethod(
+                    list, "itemActivated", Qt::DirectConnection,
+                    Q_ARG(QListWidgetItem*, hit));
+                qInfo().noquote() << "[InstaMAT2Remix] Asset list match: row" << hitRow
+                    << "text='" << hit->text() << "' invoked itemActivated ->" << ok;
+                return ok;
             }
             qWarning().noquote() << "[InstaMAT2Remix] Asset list: no match for '"
                 << filenameWithExt << "' / '" << filenameNoExt << "' across"
@@ -510,18 +592,22 @@ namespace InstaMAT2Remix {
         // RunNewProjectRecipe
         //
         // Drives the InstaMAT New Project dialog (QML-based, identified by class
-        // names supplied by the InstaMAT engineering team) end-to-end:
-        //   1. Click first IMProjectTypeSelectionButton (Asset Texturing).
-        //   2. Open mesh PickButton -> deferred work runs inside its modal QMenu.
-        //   3. Trigger first action -> waits for asset selection popup.
-        //   4. Toolbar: enable "Show Library Objects", disable "Show Only User".
-        //   5. Locate mesh in QListWidget by filename, emit itemActivated.
-        //   6. Click first IMTemplateSelectionButton -> dialog closes, project loads.
+        // names supplied by the InstaMAT engineering team) end-to-end, for the
+        // template described by cfg:
+        //   1. Click the template's IMProjectTypeSelectionButton (matched by
+        //      MatchProjectTypeTile: exact title first, guarded contains second).
+        //   2. (picker templates) Open the asset PickButton -> deferred work runs
+        //      inside its modal QMenu; select targetAssetAbs (mesh or image) in
+        //      the asset popup by filename.
+        //      (pickerless templates, e.g. Element Graph) skip straight to 3.
+        //   3. Optionally force Up Axis = Z, then click Create -> dialog closes,
+        //      project loads.
         // On any failure: logs the cause and calls CloseAnyVisibleDialog so the
         // outer QDialog::exec() unblocks (no stuck modal).
         // ---------------------------------------------------------------------------
         bool RunNewProjectRecipe(QWidget* dialogRoot,
-                                 const QString& meshPathAbs,
+                                 const TemplateRecipeConfig& cfg,
+                                 const QString& targetAssetAbs,
                                  QString* outError,
                                  bool* outProjectTypeUncertain,
                                  const std::function<void(const QString&)>& fileLog) {
@@ -554,17 +640,18 @@ namespace InstaMAT2Remix {
             };
 
             if (!dialogRoot) return fail("dialogRoot is null");
-            log(QString("Recipe START dialog=%1 name='%2' mesh=%3")
+            log(QString("Recipe START dialog=%1 name='%2' template=%3 target=%4")
                 .arg(dialogRoot->metaObject()->className(),
                      dialogRoot->objectName(),
-                     meshPathAbs));
+                     QString::fromUtf8(cfg.displayName),
+                     targetAssetAbs.isEmpty() ? QStringLiteral("(none)") : targetAssetAbs));
 
             QPointer<QWidget> dialogGuard(dialogRoot);
-            const QFileInfo meshInfo(meshPathAbs);
-            const QString meshFileName = meshInfo.fileName();
-            const QString meshBaseName = meshInfo.completeBaseName();
+            const QFileInfo targetInfo(targetAssetAbs);
+            const QString targetFileName = targetInfo.fileName();
+            const QString targetBaseName = targetInfo.completeBaseName();
 
-            // Step 1: pick the "Asset Texturing" IMProjectTypeSelectionButton.
+            // Step 1: pick the template's IMProjectTypeSelectionButton.
             // The buttons have empty text/tooltip/accessibleName at the
             // QAbstractButton level (confirmed by Step 8 diagnostic), so the
             // label lives in either:
@@ -572,23 +659,16 @@ namespace InstaMAT2Remix {
             //   - a child widget's accessibleName,
             //   - a dynamic QObject property, or
             //   - a static meta-property (likely a name-like one).
-            // We scan all four, matching "asset texturing". Falling back to
-            // typeButtons.first() was observed to pick the Layering Project
-            // tile, which causes the wizard to discard the mesh — so we only
-            // do that as a last resort and log every button's introspection
-            // so the next iteration has data to work from.
+            // All four feed MatchProjectTypeTile (exact-title pass first, then
+            // a guarded contains pass — see ProjectTemplates.cpp). Falling back
+            // to typeButtons.first() historically picked the Layering tile, so
+            // only Asset Texturing (where any mesh project still works) allows
+            // it; other templates fail hard with the introspection dump.
             const QList<QObject*> typeButtons = FindAllDescendantsByClassName(
                 dialogRoot, "InstaMAT::UI::IMProjectTypeSelectionButton");
             log(QString("Recipe Step1: project type buttons found = %1").arg(typeButtons.size()));
             if (typeButtons.isEmpty())
                 return fail("No IMProjectTypeSelectionButton found");
-
-            auto matchesAssetTexturing = [](const QString& s) -> bool {
-                if (s.isEmpty()) return false;
-                const QString n = NormalizeActionText(s).trimmed().toLower();
-                return n.contains(QLatin1String("asset texturing"))
-                    || n.contains(QLatin1String("assettexturing"));
-            };
 
             auto collectStringSources = [](QObject* btn,
                                            QStringList* labels,
@@ -636,7 +716,7 @@ namespace InstaMAT2Remix {
                 }
             };
 
-            QObject* assetTexBtn = nullptr;
+            QList<QStringList> perButtonStrings;
             for (int i = 0; i < typeButtons.size(); ++i) {
                 QObject* btn = typeButtons[i];
                 QStringList labels, childAcc, dynProps, staticProps;
@@ -648,122 +728,162 @@ namespace InstaMAT2Remix {
                          childAcc.join(" | "),
                          dynProps.join(" | "),
                          staticProps.join(" | ")));
-                if (assetTexBtn) continue; // keep logging, but stop matching
-                auto anyMatches = [&](const QStringList& xs) {
-                    for (const QString& s : xs)
-                        if (matchesAssetTexturing(s)) return true;
-                    return false;
-                };
-                if (anyMatches(labels) || anyMatches(childAcc)
-                    || anyMatches(dynProps) || anyMatches(staticProps))
-                    assetTexBtn = btn;
+                // Property entries are "name=value" — match on the value part.
+                QStringList combined = labels + childAcc;
+                for (const QString& kv : dynProps + staticProps)
+                    combined << kv.section('=', 1);
+                perButtonStrings.append(combined);
             }
 
-            if (!assetTexBtn) {
-                log("Recipe Step1: no 'Asset Texturing' label match — falling "
-                    "back to typeButtons.first(); inspect dump above to find "
-                    "the correct identifier.");
+            QObject* templateBtn = nullptr;
+            const int tileIdx = MatchProjectTypeTile(perButtonStrings, cfg);
+            if (tileIdx >= 0) {
+                templateBtn = typeButtons.at(tileIdx);
+                log(QString("Recipe Step1: matched '%1' tile at index %2 via "
+                            "introspection.")
+                        .arg(QString::fromUtf8(cfg.displayName)).arg(tileIdx));
+            } else if (cfg.allowFirstTileFallback) {
+                log(QString("Recipe Step1: no '%1' tile match — falling back to "
+                            "typeButtons.first(); inspect dump above to find the "
+                            "correct identifier.")
+                        .arg(QString::fromUtf8(cfg.displayName)));
                 // The first tile has been observed to be the Material Layering
                 // project type on some Studio versions. The workflow still
                 // completes, but the caller surfaces a note in the Pull summary.
                 if (outProjectTypeUncertain) *outProjectTypeUncertain = true;
-                assetTexBtn = typeButtons.first();
+                templateBtn = typeButtons.first();
             } else {
-                log("Recipe Step1: matched Asset Texturing button via "
-                    "introspection.");
+                return fail(QString("Could not identify the '%1' project type tile "
+                                    "(no exact or unambiguous match — see the "
+                                    "per-button dump above).")
+                                .arg(QString::fromUtf8(cfg.displayName)));
             }
 
-            if (!ClickButtonViaQAbstractButton(assetTexBtn, "AssetTexturingTypeBtn"))
-                return fail("Could not click Asset Texturing project type button");
+            if (!ClickButtonViaQAbstractButton(templateBtn, "ProjectTemplateTileBtn"))
+                return fail(QString("Could not click the '%1' project type button")
+                                .arg(QString::fromUtf8(cfg.displayName)));
 
-            // Step 2: locate the inline mesh picker widget. The dialog needs a
-            // moment to swap to the project-config view after the type click, so
-            // poll up to 5 s. The picker is an
+            // Step 2 (picker templates only): locate the inline asset picker
+            // widget. The dialog needs a moment to swap to the project-config
+            // view after the type click, so poll up to 5 s. The picker is an
             // InstaMAT::UI::IMGraphObjectPickerGroupWidget whose objectName is
-            // "WIDGET_Mesh<index>" (one ILGroupWidget per form field). A second,
-            // hidden picker with an empty name also exists, so we filter on the
-            // "WIDGET_Mesh" prefix and prefer the visible instance.
-            auto findMeshPicker = [](QObject* root) -> QObject* {
-                if (!root) return nullptr;
-                QObject* firstHit = nullptr;
-                const auto all = root->findChildren<QObject*>();
-                for (QObject* o : all) {
-                    if (!o) continue;
-                    if (qstrcmp(o->metaObject()->className(),
-                                "InstaMAT::UI::IMGraphObjectPickerGroupWidget") != 0)
-                        continue;
-                    if (!o->objectName().startsWith(QStringLiteral("WIDGET_Mesh")))
-                        continue;
-                    if (auto* w = qobject_cast<QWidget*>(o)) {
-                        if (w->isVisible()) return o;
+            // "WIDGET_Mesh<index>" / "WIDGET_Image<index>" (one ILGroupWidget
+            // per form field). The Materialize prefix is unverified until the
+            // first live run, so discovery is tiered — preferred prefix
+            // (visible, then hidden), then any WIDGET_* picker — and every
+            // candidate is dumped so a wrong guess is diagnosable from the log.
+            QToolButton* pickButton = nullptr;
+            if (cfg.hasPickerStep) {
+                const QString preferredPrefix = QString::fromUtf8(cfg.pickerPreferredPrefix);
+                auto findAssetPicker = [&preferredPrefix](QObject* root) -> QObject* {
+                    if (!root) return nullptr;
+                    QObject* preferredHidden = nullptr;
+                    QObject* anyVisible = nullptr;
+                    QObject* anyHidden = nullptr;
+                    const auto all = root->findChildren<QObject*>();
+                    for (QObject* o : all) {
+                        if (!o) continue;
+                        if (qstrcmp(o->metaObject()->className(),
+                                    "InstaMAT::UI::IMGraphObjectPickerGroupWidget") != 0)
+                            continue;
+                        const QString name = o->objectName();
+                        if (!name.startsWith(QStringLiteral("WIDGET_"))) continue;
+                        auto* w = qobject_cast<QWidget*>(o);
+                        const bool visible = w && w->isVisible();
+                        const bool preferred = !preferredPrefix.isEmpty()
+                                               && name.startsWith(preferredPrefix);
+                        if (preferred && visible) return o;
+                        if (preferred && !preferredHidden) preferredHidden = o;
+                        if (!preferred && visible && !anyVisible) anyVisible = o;
+                        if (!preferred && !visible && !anyHidden) anyHidden = o;
                     }
-                    if (!firstHit) firstHit = o;
+                    if (preferredHidden) return preferredHidden;
+                    if (anyVisible) return anyVisible;
+                    return anyHidden;
+                };
+                QObject* pickerFrame = nullptr;
+                const qint64 step2Deadline = QDateTime::currentMSecsSinceEpoch() + 5000;
+                while (QDateTime::currentMSecsSinceEpoch() < step2Deadline) {
+                    if (!dialogGuard) return fail("Dialog disappeared during Step 2 wait");
+                    pickerFrame = findAssetPicker(dialogGuard);
+                    if (pickerFrame) break;
+                    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
                 }
-                return firstHit;
-            };
-            QObject* pickerFrame = nullptr;
-            const qint64 step2Deadline = QDateTime::currentMSecsSinceEpoch() + 5000;
-            while (QDateTime::currentMSecsSinceEpoch() < step2Deadline) {
-                if (!dialogGuard) return fail("Dialog disappeared during Step 2 wait");
-                pickerFrame = findMeshPicker(dialogGuard);
-                if (pickerFrame) break;
-                QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
-            }
-            log(QString("Recipe Step2: pickerFrame = %1 name='%2'")
-                .arg(pickerFrame ? pickerFrame->metaObject()->className() : QStringLiteral("null"),
-                     pickerFrame ? pickerFrame->objectName() : QString()));
-
-            if (!pickerFrame) {
-                // Diagnostic dump: enumerate unique (className, objectName) pairs
-                // in the dialog so we can see what classes are actually present.
-                QSet<QString> seen;
-                int dumped = 0;
+                // One-shot candidate dump (prefix discovery for new templates).
                 if (dialogGuard) {
-                    logDebug(QString("Step2 diagnostic: dumping dialog '%1' children:")
-                        .arg(dialogGuard->metaObject()->className()));
-                    const auto allChildren = dialogGuard->findChildren<QObject*>();
-                    logDebug(QString("  total descendants = %1").arg(allChildren.size()));
-                    for (QObject* c : allChildren) {
-                        if (!c) continue;
-                        const QString key = QString("%1|%2")
-                            .arg(c->metaObject()->className(), c->objectName());
-                        if (seen.contains(key)) continue;
-                        seen.insert(key);
-                        if (dumped < 80) {
-                            QString visible;
-                            if (auto* w = qobject_cast<QWidget*>(c))
-                                visible = w->isVisible() ? " [vis]" : " [hid]";
-                            logDebug(QString("  class='%1' name='%2'%3")
-                                .arg(c->metaObject()->className(),
-                                     c->objectName(),
-                                     visible));
-                            ++dumped;
-                        }
+                    for (QObject* o : dialogGuard->findChildren<QObject*>()) {
+                        if (!o || qstrcmp(o->metaObject()->className(),
+                                          "InstaMAT::UI::IMGraphObjectPickerGroupWidget") != 0)
+                            continue;
+                        auto* w = qobject_cast<QWidget*>(o);
+                        logDebug(QString("  picker candidate: name='%1'%2")
+                                     .arg(o->objectName(),
+                                          (w && w->isVisible()) ? " [vis]" : " [hid]"));
                     }
-                    logDebug(QString("  unique class+name combos = %1 (showed first %2)")
-                        .arg(seen.size()).arg(dumped));
                 }
-                return fail("Mesh picker frame not found");
+                log(QString("Recipe Step2: pickerFrame = %1 name='%2' (wanted prefix '%3')")
+                    .arg(pickerFrame ? pickerFrame->metaObject()->className() : QStringLiteral("null"),
+                         pickerFrame ? pickerFrame->objectName() : QString(),
+                         preferredPrefix));
+
+                if (!pickerFrame) {
+                    // Diagnostic dump: enumerate unique (className, objectName) pairs
+                    // in the dialog so we can see what classes are actually present.
+                    QSet<QString> seen;
+                    int dumped = 0;
+                    if (dialogGuard) {
+                        logDebug(QString("Step2 diagnostic: dumping dialog '%1' children:")
+                            .arg(dialogGuard->metaObject()->className()));
+                        const auto allChildren = dialogGuard->findChildren<QObject*>();
+                        logDebug(QString("  total descendants = %1").arg(allChildren.size()));
+                        for (QObject* c : allChildren) {
+                            if (!c) continue;
+                            const QString key = QString("%1|%2")
+                                .arg(c->metaObject()->className(), c->objectName());
+                            if (seen.contains(key)) continue;
+                            seen.insert(key);
+                            if (dumped < 80) {
+                                QString visible;
+                                if (auto* w = qobject_cast<QWidget*>(c))
+                                    visible = w->isVisible() ? " [vis]" : " [hid]";
+                                logDebug(QString("  class='%1' name='%2'%3")
+                                    .arg(c->metaObject()->className(),
+                                         c->objectName(),
+                                         visible));
+                                ++dumped;
+                            }
+                        }
+                        logDebug(QString("  unique class+name combos = %1 (showed first %2)")
+                            .arg(seen.size()).arg(dumped));
+                    }
+                    return fail("Asset picker frame not found");
+                }
+
+                pickButton = pickerFrame->findChild<QToolButton*>(
+                    "PickButton", Qt::FindChildrenRecursively);
+                if (!pickButton) return fail("PickButton (QToolButton) not found in picker frame");
             }
 
-            QToolButton* pickButton = pickerFrame->findChild<QToolButton*>(
-                "PickButton", Qt::FindChildrenRecursively);
-            if (!pickButton) return fail("PickButton (QToolButton) not found in picker frame");
-
-            // Steps 3-9 deferred: pickButton->click() below enters QMenu::exec().
-            // We schedule the rest of the recipe as a queued event so it fires
-            // inside that nested event loop while the menu is still open.
+            // Steps 3-9 deferred: for picker templates pickButton->click() below
+            // enters QMenu::exec(), so the rest of the recipe is scheduled as a
+            // queued event that fires inside that nested loop while the menu is
+            // open. Pickerless templates (Element Graph) schedule the same
+            // callback — it skips straight to the Create stage — and the outer
+            // wait loop below pumps until it completes.
             auto stepResult = std::make_shared<std::pair<bool, QString>>(false, QString());
+            const bool doPickerSteps = cfg.hasPickerStep;
+            const bool doUpAxis = cfg.setUpAxis;
 
-            QTimer::singleShot(0, pickButton, [stepResult, diagLines, log, logDebug,
-                                               dialogGuard, meshPathAbs,
-                                               meshFileName, meshBaseName]() {
+            QTimer::singleShot(0, dialogRoot, [stepResult, diagLines, log, logDebug,
+                                               dialogGuard, doPickerSteps, doUpAxis,
+                                               targetFileName, targetBaseName]() {
                 auto setErr = [&](const QString& msg) {
                     diagLines->append("FAIL: " + msg);
                     stepResult->second = msg;
                     qWarning().noquote() << "[InstaMAT2Remix] Recipe (deferred) FAILED:" << msg;
                 };
 
+                if (doPickerSteps) {
                 QMenu* contextMenu = WaitForActivePopupMenu(5000);
                 if (!contextMenu) { setErr("Context menu after PickButton never appeared"); return; }
                 log(QString("Recipe Step4: context menu has %1 actions").arg(contextMenu->actions().size()));
@@ -795,6 +915,9 @@ namespace InstaMAT2Remix {
                     }
                 }
                 if (!assetPopup) { setErr("GraphObjectImagePickerPopupFrame did not appear"); return; }
+                // The popup is host-owned and can be destroyed while we pump
+                // events below — track it through a QPointer, never raw.
+                QPointer<QWidget> popupGuard(assetPopup);
                 log(QString("Recipe Step5: asset popup found, class=%1")
                     .arg(assetPopup->metaObject()->className()));
 
@@ -819,36 +942,59 @@ namespace InstaMAT2Remix {
 
                 PumpEventsFor(400);
 
-                QListWidget* list = assetPopup->findChild<QListWidget*>(
-                    QString(), Qt::FindChildrenRecursively);
-                if (!list) {
-                    setErr("QListWidget not found in asset popup");
-                    assetPopup->close();
-                    return;
+                // Studio fills the picker list from an ASYNC asset scan, so a
+                // just-downloaded image (Materialize source) may not be listed
+                // on the first look — observed live 2026-07-12 ("Asset
+                // '<hash>_materialize.png' not found in asset list", fine on a
+                // manual re-pull). Re-scan a few times before failing; the
+                // popup can be destroyed while we pump, so every round goes
+                // through popupGuard and re-finds the QListWidget.
+                bool activated = false;
+                bool listEverFound = false;
+                for (int scan = 0; scan < 5 && !activated; ++scan) {
+                    if (scan > 0) {
+                        log(QString("Recipe Step7: asset '%1' not listed yet — waiting for "
+                                    "the asset scan (retry %2/4)")
+                                .arg(targetFileName).arg(scan));
+                        PumpEventsFor(750);
+                    }
+                    if (!popupGuard) {
+                        setErr("Asset popup closed while waiting for the asset list");
+                        return;
+                    }
+                    QListWidget* list = popupGuard->findChild<QListWidget*>(
+                        QString(), Qt::FindChildrenRecursively);
+                    if (!list) continue;
+                    listEverFound = true;
+                    log(QString("Recipe Step7: list count = %1").arg(list->count()));
+                    activated = ActivateListWidgetItemByText(list, targetFileName, targetBaseName);
                 }
-                log(QString("Recipe Step7: list count = %1").arg(list->count()));
-                if (!ActivateListWidgetItemByText(list, meshFileName, meshBaseName)) {
-                    setErr(QString("Mesh '%1' not found in asset list").arg(meshFileName));
-                    assetPopup->close();
+                if (!activated) {
+                    setErr(listEverFound
+                               ? QString("Asset '%1' not found in asset list").arg(targetFileName)
+                               : QString("QListWidget not found in asset popup"));
+                    if (popupGuard) popupGuard->close();
                     return;
                 }
 
                 const qint64 popupDeadline = QDateTime::currentMSecsSinceEpoch() + 3000;
                 while (QDateTime::currentMSecsSinceEpoch() < popupDeadline) {
-                    if (!assetPopup || !assetPopup->isVisible()) break;
+                    if (!popupGuard || !popupGuard->isVisible()) break;
                     QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
                 }
+                } // end doPickerSteps
 
                 if (!dialogGuard) { setErr("Dialog vanished before template button click"); return; }
 
-                // Step 7.5: Force the wizard's "Up Axis" combo box to Z.
+                // Step 7.5: Force the wizard's "Up Axis" combo box to Z (mesh
+                // imports only — image/pickerless templates have no such field).
                 // RTX Remix captures are Z-up by convention; leaving the wizard
                 // at its default (typically Y) imports them sideways and breaks
                 // downstream baking. We locate the field by its objectName
                 // ("WIDGET_Up Axis4" in the current SDK; the trailing digit is
                 // the form index, so we tolerate any suffix) and pick the
                 // item whose visible text starts with "Z".
-                {
+                if (doUpAxis) {
                     QComboBox* upAxisCombo = nullptr;
                     QString upAxisGroupName;
                     for (QObject* child : dialogGuard->findChildren<QObject*>()) {
@@ -1129,9 +1275,14 @@ namespace InstaMAT2Remix {
                 setErr("Dialog did not close after Create click");
             });
 
-            log("Recipe Step3: clicking PickButton (enters QMenu::exec)");
-            pickButton->click();
-            log("Recipe: PickButton click() returned (menu closed)");
+            if (pickButton) {
+                log("Recipe Step3: clicking PickButton (enters QMenu::exec)");
+                pickButton->click();
+                log("Recipe: PickButton click() returned (menu closed)");
+            } else {
+                log("Recipe Step3: template has no asset picker — the deferred "
+                    "callback goes straight to the Create stage.");
+            }
 
             const qint64 outerDeadline = QDateTime::currentMSecsSinceEpoch() + 12000;
             while (QDateTime::currentMSecsSinceEpoch() < outerDeadline) {
@@ -1212,9 +1363,10 @@ namespace InstaMAT2Remix {
         }
 
         // ---------------------------------------------------------------------------
-        // Orchestrator: Attempts to automatically create an Asset Texturing project
-        // with the given mesh by driving InstaMAT's New Project dialog via the
-        // class names provided by the InstaMAT engineering team.
+        // Orchestrator: Attempts to automatically create a project of the given
+        // template with the given target asset (mesh or image; empty for
+        // pickerless templates) by driving InstaMAT's New Project dialog via
+        // the class names provided by the InstaMAT engineering team.
         //
         // Two cases:
         //   1) The new-project dialog is already visible (e.g. start screen) ->
@@ -1222,14 +1374,13 @@ namespace InstaMAT2Remix {
         //   2) Need to trigger File -> New, which opens a blocking QDialog::exec().
         //      Schedule the recipe via QTimer to fire inside that nested event loop.
         // ---------------------------------------------------------------------------
-        bool TryCreateTexturingProjectFromMesh(const QString& meshPathAbs,
-                                               const QString& suggestedName,
-                                               QString* outError,
-                                               bool* outProjectTypeUncertain,
-                                               const std::function<void(const QString&)>& fileLog) {
+        bool TryCreateProjectFromTemplate(const TemplateRecipeConfig& cfg,
+                                          const QString& targetAssetAbs,
+                                          QString* outError,
+                                          bool* outProjectTypeUncertain,
+                                          const std::function<void(const QString&)>& fileLog) {
             if (outError) outError->clear();
             if (outProjectTypeUncertain) *outProjectTypeUncertain = false;
-            (void)suggestedName; // The recipe reads the asset library entry, not a name field.
 
             auto log = [&fileLog](const QString& s) {
                 qInfo().noquote() << "[InstaMAT2Remix]" << s;
@@ -1246,7 +1397,7 @@ namespace InstaMAT2Remix {
             if (QWidget* existing = WaitForTopLevelByClassName(
                     "InstaMAT::UI::IMProjectTypeSelectionDialog", 0)) {
                 log("Auto-create: IMProjectTypeSelectionDialog already visible, running recipe directly.");
-                return RunNewProjectRecipe(existing, meshPathAbs, outError,
+                return RunNewProjectRecipe(existing, cfg, targetAssetAbs, outError,
                                            outProjectTypeUncertain, fileLog);
             }
 
@@ -1269,7 +1420,8 @@ namespace InstaMAT2Remix {
             // event loop. fileLog is copied into the lambda: the deferred
             // callback outlives this function's stack frame.
             const std::function<void(const QString&)> deferredFileLog = fileLog;
-            QTimer::singleShot(500, win, [state, win, meshPathAbs, deferredFileLog]() {
+            const QString targetAsset = targetAssetAbs;
+            QTimer::singleShot(500, win, [state, win, &cfg, targetAsset, deferredFileLog]() {
                 auto log = [&deferredFileLog](const QString& s) {
                     qInfo().noquote() << "[InstaMAT2Remix]" << s;
                     if (deferredFileLog) deferredFileLog(s);
@@ -1315,7 +1467,7 @@ namespace InstaMAT2Remix {
                         .arg(QString::fromUtf8(recipeDlg->metaObject()->className()),
                              recipeDlg->objectName()));
 
-                state->success = RunNewProjectRecipe(recipeDlg, meshPathAbs, &state->error,
+                state->success = RunNewProjectRecipe(recipeDlg, cfg, targetAsset, &state->error,
                                                      &state->typeUncertain, deferredFileLog);
 
                 if (!state->success) {
@@ -1376,8 +1528,9 @@ namespace InstaMAT2Remix {
         m_tools.SetTexconvExecutable(texconv.toStdString());
         if (texconv.isEmpty()) {
             m_logger.Warning("texconv.exe not found in any known install location. "
-                             "DDS->PNG conversion will fail (Pull will write an empty manifest). "
-                             "Set Texconv Path in Settings to fix.");
+                             "DDS->PNG conversion will fail, so 'Import Textures from "
+                             "Remix' cannot convert Remix's DDS textures. Set "
+                             "'texconv.exe' in Settings > Paths to fix.");
         }
 
         const QString ll = settings.value("LogLevel", "info").toString();
@@ -1395,11 +1548,25 @@ namespace InstaMAT2Remix {
     }
 
     bool RemixConnector::TestConnection(QString& outMessage) const {
-        QString remixDirAbs;
+        // Deliberately short (5 s, single attempt): this runs synchronously on
+        // the UI thread from the Settings dialog and Diagnostics, so it must
+        // never sit through the user's full PollTimeoutSec x 3-retry budget.
         QString err;
-        if (GetRemixDefaultDirectory(remixDirAbs, err)) {
-            outMessage = QString("Remix default directory: %1").arg(remixDirAbs);
-            return true;
+        const QJsonDocument doc = RequestJson(
+            "GET", "/stagecraft/assets/default-directory", {}, nullptr, &err,
+            /*timeoutSecOverride=*/5.0, /*maxAttemptsOverride=*/1);
+        if (doc.isObject()) {
+            const QJsonObject data = doc.object();
+            const QString dirRaw = data.value("directory_path").toString(
+                data.value("asset_path").toString());
+            if (!dirRaw.isEmpty()) {
+                outMessage = QString("Remix default directory: %1")
+                                 .arg(QDir::cleanPath(QFileInfo(dirRaw).absoluteFilePath()));
+                return true;
+            }
+            outMessage = "Connected, but RTX Remix returned no project directory. "
+                         "Open a project in the RTX Remix Toolkit.";
+            return false;
         }
         outMessage = err.isEmpty() ? "Failed to contact RTX Remix API." : err;
         return false;
@@ -1438,7 +1605,7 @@ namespace InstaMAT2Remix {
         lines << QString("Export Format: %1").arg(settings.value("ExportFileFormat", "png").toString());
         lines << QString("Export Resolution: %1").arg([&settings]() {
                             const int r = settings.value("ExportResolution", 0).toInt();
-                            return r > 0 ? QString::number(r) : QString("Auto (match Remix texture)");
+                            return r > 0 ? QString::number(r) : QString("Auto (project's baked resolution)");
                         }());
         lines << QString("Include Opacity Map: %1").arg(settings.value("IncludeOpacityMap", false).toBool() ? "true" : "false");
         lines << QString("Restore Aspect On Export: %1").arg(settings.value("RestoreAspectOnExport", true).toBool() ? "true" : "false");
@@ -1531,7 +1698,14 @@ namespace InstaMAT2Remix {
             if (attempt > 0) {
                 qInfo().noquote() << "[InstaMAT2Remix] Retry" << attempt << "of" << (maxAttempts - 1) << "for" << endpoint;
                 const int delayIdx = qMin(attempt - 1, int(sizeof(retryDelaysMs) / sizeof(retryDelaysMs[0])) - 1);
-                QThread::msleep(retryDelaysMs[delayIdx]);
+                // Pump (user input excluded) instead of msleep: this runs on
+                // the UI thread and a blind sleep freezes Studio for the
+                // whole 2-4 s backoff.
+                const qint64 backoffEnd = QDateTime::currentMSecsSinceEpoch() + retryDelaysMs[delayIdx];
+                while (QDateTime::currentMSecsSinceEpoch() < backoffEnd) {
+                    QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents, 25);
+                    QThread::msleep(10);
+                }
             }
 
             QNetworkAccessManager mgr;
@@ -1566,17 +1740,28 @@ namespace InstaMAT2Remix {
 
             const auto errCode = reply->error();
             if (errCode != QNetworkReply::NoError) {
-                QString details = reply->errorString();
-                if (!bytes.isEmpty()) details += " | " + QString::fromUtf8(bytes.left(600));
-                lastError = QString("HTTP %1: %2").arg(status).arg(details);
+                // setTransferTimeout() aborts the reply with
+                // OperationCanceledError, so a plain timeout surfaces here
+                // (not via the manual timer above). Report it as what it is
+                // and keep it retriable.
+                const bool isTimeout = (errCode == QNetworkReply::OperationCanceledError ||
+                                        errCode == QNetworkReply::TimeoutError);
+                if (isTimeout) {
+                    lastError = QString("RTX Remix API request timed out after %1 s.")
+                                    .arg(resolvedTimeoutSec);
+                } else {
+                    QString details = reply->errorString();
+                    if (!bytes.isEmpty()) details += " | " + QString::fromUtf8(bytes.left(600));
+                    lastError = QString("HTTP %1: %2").arg(status).arg(details);
+                }
                 m_logger.Warning(QString("%1 %2 failed: %3").arg(m, endpoint, lastError));
                 reply->deleteLater();
 
                 // Only retry on network/connection errors, not on HTTP 4xx/5xx.
-                if (errCode == QNetworkReply::ConnectionRefusedError ||
+                if (isTimeout ||
+                    errCode == QNetworkReply::ConnectionRefusedError ||
                     errCode == QNetworkReply::RemoteHostClosedError ||
                     errCode == QNetworkReply::HostNotFoundError ||
-                    errCode == QNetworkReply::TimeoutError ||
                     errCode == QNetworkReply::TemporaryNetworkFailureError ||
                     errCode == QNetworkReply::NetworkSessionFailedError ||
                     errCode == QNetworkReply::UnknownNetworkError) {
@@ -1615,8 +1800,17 @@ namespace InstaMAT2Remix {
             return doc;
         }
 
-        // All retries exhausted.
-        if (outError) *outError = lastError.isEmpty() ? "Request failed after retries." : lastError;
+        // All retries exhausted. For connectivity-shaped failures, tell the
+        // user what to actually check instead of leaving a bare socket error.
+        if (outError) {
+            *outError = lastError.isEmpty() ? "Request failed after retries." : lastError;
+            if (lastError.contains("refused", Qt::CaseInsensitive) ||
+                lastError.contains("timed out", Qt::CaseInsensitive) ||
+                lastError.contains("Host", Qt::CaseInsensitive)) {
+                *outError += QString("\n\nIs the RTX Remix Toolkit running with its REST API "
+                                     "enabled on %1? (Settings > Connection)").arg(base);
+            }
+        }
         return {};
     }
 
@@ -1660,6 +1854,7 @@ namespace InstaMAT2Remix {
             return false;
         }
 
+        QString meshPrim;
         for (const QJsonValue& v : paths) {
             if (!v.isString()) continue;
             const QString p = NormalizePathSlashes(v.toString());
@@ -1676,9 +1871,29 @@ namespace InstaMAT2Remix {
                 outMaterialPrim = p;
                 return true;
             }
+
+            const bool meshLike = lower.contains("/instances/inst_") || lower.contains("/meshes/") ||
+                                  lower.contains("/mesh/") || lower.contains("/geom/");
+            if (meshLike && meshPrim.isEmpty()) meshPrim = p;
         }
 
-        outError = "Could not identify a material prim from selection.";
+        // A mesh is selected instead of a material: resolve its bound material
+        // (same fallback Pull From Remix uses), so Import Textures and Force
+        // Push work from a mesh selection too.
+        if (!meshPrim.isEmpty()) {
+            const QString defPath = ExtractMeshDefinitionPath(meshPrim);
+            QString matErr;
+            if (GetMaterialFromMeshPrim(defPath.isEmpty() ? meshPrim : defPath,
+                                        outMaterialPrim, matErr)) {
+                return true;
+            }
+            outError = "A mesh is selected, but its bound material could not be "
+                       "resolved: " + matErr;
+            return false;
+        }
+
+        outError = "Could not identify a material prim from the current selection.\n"
+                   "Select a mesh or material in RTX Remix, then try again.";
         return false;
     }
 
@@ -1714,18 +1929,29 @@ namespace InstaMAT2Remix {
 
         QString absContext;
         QString relMesh;
+        QString absMesh; // absolute path that itself looks like a mesh file
 
         auto consider = [&](const QString& s) {
             const QString p = NormalizePathSlashes(s);
             const QString lower = p.toLower();
+            const bool meshExt =
+                lower.endsWith(".usd") || lower.endsWith(".usda") || lower.endsWith(".usdc") ||
+                lower.endsWith(".obj") || lower.endsWith(".fbx") || lower.endsWith(".gltf") ||
+                lower.endsWith(".glb");
             if (QDir::isAbsolutePath(p)) {
                 absContext = p;
+                // A USD can be the capture's *context layer* rather than the
+                // mesh, so only treat an absolute USD as the mesh when its
+                // path says so; non-USD mesh formats are unambiguous.
+                const bool usdExt = lower.endsWith(".usd") || lower.endsWith(".usda") ||
+                                    lower.endsWith(".usdc");
+                const bool looksLikeMeshFile =
+                    !usdExt || lower.contains("/meshes/") ||
+                    QFileInfo(lower).fileName().startsWith(QLatin1String("mesh_"));
+                if (meshExt && looksLikeMeshFile) absMesh = p;
                 return;
             }
-            if (lower.endsWith(".usd") || lower.endsWith(".usda") || lower.endsWith(".usdc") ||
-                lower.endsWith(".obj") || lower.endsWith(".fbx") || lower.endsWith(".gltf") || lower.endsWith(".glb")) {
-                relMesh = p;
-            }
+            if (meshExt) relMesh = p;
         };
 
         const QJsonArray arr = v.toArray();
@@ -1744,6 +1970,15 @@ namespace InstaMAT2Remix {
                 }
             }
             if (!relMesh.isEmpty() && !absContext.isEmpty()) break;
+        }
+
+        // Remix can also reference the mesh by an absolute path only; accept
+        // that when no relative path was offered (the caller handles absolute
+        // mesh paths directly).
+        if (relMesh.isEmpty() && !absMesh.isEmpty()) {
+            outMeshPath = absMesh;
+            outContextAbs = absContext;
+            return true;
         }
 
         if (relMesh.isEmpty()) {
@@ -1835,21 +2070,8 @@ namespace InstaMAT2Remix {
             }
         }
 
-        auto extractDefinitionPath = [](const QString& primPath) -> QString {
-            const QString p = NormalizePathSlashes(primPath);
-            QRegularExpression re1(R"(^(.*)/instances/inst_([A-Z0-9]{16}(?:_[0-9]+)?)(?:_[0-9]+)?(?:/.*)?$)");
-            auto m1 = re1.match(p);
-            if (m1.hasMatch()) return QString("%1/meshes/mesh_%2").arg(m1.captured(1)).arg(m1.captured(2));
-
-            QRegularExpression re2(R"(^(.*(?:/meshes|/Mesh|/Geom)/mesh_[A-Z0-9]{16}(?:_[0-9]+)?)(?:/.*)?$)");
-            auto m2 = re2.match(p);
-            if (m2.hasMatch()) return m2.captured(1);
-
-            return {};
-        };
-
         if (!meshPrimInitial.isEmpty() && materialPrim.isEmpty()) {
-            const QString defPath = extractDefinitionPath(meshPrimInitial);
+            const QString defPath = ExtractMeshDefinitionPath(meshPrimInitial);
             const QString lookup = defPath.isEmpty() ? meshPrimInitial : defPath;
             QString matErr;
             if (!GetMaterialFromMeshPrim(lookup, materialPrim, matErr)) {
@@ -1869,7 +2091,7 @@ namespace InstaMAT2Remix {
         QStringList primsToTry;
         if (!meshPrimInitial.isEmpty()) {
             primsToTry << meshPrimInitial;
-            const QString defPath = extractDefinitionPath(meshPrimInitial);
+            const QString defPath = ExtractMeshDefinitionPath(meshPrimInitial);
             if (!defPath.isEmpty() && !primsToTry.contains(defPath)) primsToTry << defPath;
         }
         if (!primsToTry.contains(materialPrim)) primsToTry << materialPrim;
@@ -1906,10 +2128,37 @@ namespace InstaMAT2Remix {
         // project from the mesh and link it. Zero prompts; no texture
         // download — textures come from 'Import Textures from Remix'.
         // ---------------------------------------------------------------------------
+        if (WarnIfBusy(m_operationInProgress)) return;
+        const BusyGuard busy(m_operationInProgress);
+
         QSettings settings("InstaMAT2Remix", "Config");
         const bool autoUnwrap = settings.value("AutoUnwrap", false).toBool();
 
-        QProgressDialog progress("Querying RTX Remix for selection...", "Cancel", 0, 3, nullptr);
+        // Which InstaMAT template to create: remembered setting, or the
+        // chooser dialog ("ask" is the default). Cancelling the chooser
+        // cancels the whole Pull, before any network traffic.
+        ProjectTemplate tpl = ProjectTemplate::AssetTexturing;
+        {
+            const QString tplSetting = settings.value("PullProjectTemplate", "ask").toString();
+            if (!TemplateFromSettingsValue(tplSetting, tpl)) {
+                bool remember = false;
+                if (!AskPullTemplate(FindHostMainWindow(), tpl, remember)) {
+                    m_logger.Info("Pull cancelled at the template chooser.");
+                    return;
+                }
+                if (remember) {
+                    settings.setValue("PullProjectTemplate",
+                                      QLatin1String(GetTemplateConfig(tpl).settingsValue));
+                    m_logger.Info("Pull template remembered (change in Settings > Pull).");
+                }
+            }
+        }
+        const TemplateRecipeConfig& tplCfg = GetTemplateConfig(tpl);
+        const bool isAssetTexturing = (tpl == ProjectTemplate::AssetTexturing);
+        m_logger.Info(QString("Pull template: %1").arg(QString::fromUtf8(tplCfg.displayName)));
+
+        QProgressDialog progress("Querying RTX Remix for selection...", "Cancel", 0, 3,
+                                 FindHostMainWindow());
         progress.setWindowTitle(kPluginName);
         progress.setWindowModality(Qt::WindowModal);
         progress.setMinimumDuration(0);
@@ -1932,7 +2181,10 @@ namespace InstaMAT2Remix {
         const QString ctxFile = QString::fromStdString(details.contextFilePath);
         const QString materialPrim = QString::fromStdString(details.materialPrimPath);
 
-        const bool useTilingMesh = settings.value("UseTilingMeshOnPull", false).toBool();
+        // Tiling substitute and Blender unwrap are mesh-project concerns; the
+        // Element Graph / Materialize templates skip them.
+        const bool useTilingMesh =
+            isAssetTexturing && settings.value("UseTilingMeshOnPull", false).toBool();
         QString tilingMeshPath = QDir::cleanPath(settings.value("TilingMeshPath", "").toString());
 
         // If the tiling mesh path is relative, interpret it relative to this plugin dir.
@@ -1953,10 +2205,13 @@ namespace InstaMAT2Remix {
         } else if (!ctxFile.isEmpty() && QDir::isAbsolutePath(ctxFile)) {
             const QString ctxDir = QFileInfo(ctxFile).dir().absolutePath();
             meshAbs = QDir::cleanPath(QDir(ctxDir).filePath(meshPathRaw));
-        } else {
+        } else if (isAssetTexturing) {
             progress.close();
             QMessageBox::warning(nullptr, kPluginName, "Mesh path is relative, but no absolute context file was provided by Remix.");
             return;
+        } else {
+            m_logger.Warning("Pull: could not resolve the capture mesh locally — "
+                             "continuing (the chosen template does not require it).");
         }
 
         if (useTilingMesh) {
@@ -1971,10 +2226,15 @@ namespace InstaMAT2Remix {
             }
         }
 
-        if (!QFileInfo::exists(meshAbs)) {
-            progress.close();
-            QMessageBox::warning(nullptr, kPluginName, "Mesh file does not exist locally:\n\n" + meshAbs);
-            return;
+        if (!meshAbs.isEmpty() && !QFileInfo::exists(meshAbs)) {
+            if (isAssetTexturing) {
+                progress.close();
+                QMessageBox::warning(nullptr, kPluginName, "Mesh file does not exist locally:\n\n" + meshAbs);
+                return;
+            }
+            m_logger.Warning("Pull: capture mesh missing locally (" + meshAbs +
+                             ") — continuing without it (template does not require it).");
+            meshAbs.clear();
         }
 
         // Step 1: Auto-unwrap with Blender (if enabled).
@@ -1984,98 +2244,279 @@ namespace InstaMAT2Remix {
         QCoreApplication::processEvents();
 
         QString finalMesh = meshAbs;
+        QString unwrapNote; // surfaced in the Pull summary when unwrap didn't run
 
-        if (autoUnwrap && !useTilingMesh && finalMesh == meshAbs
-                && !m_tools.GetBlenderExecutable().empty()) {
-            progress.setLabelText("Auto-unwrapping mesh with Blender...");
-            QCoreApplication::processEvents();
-
-            ExternalTools::UnwrapParams params;
-            {
-                params.angleLimit = settings.value("BlenderSmartUVAngleLimit", 66.0).toDouble();
-                params.islandMargin = settings.value("BlenderSmartUVIslandMargin", 0.003).toDouble();
-                params.areaWeight = settings.value("BlenderSmartUVAreaWeight", 0.0).toDouble();
-                params.stretchToBounds = settings.value("BlenderSmartUVStretchToBounds", false).toBool();
-            }
-
-            std::string unwrapped;
-            if (m_tools.RunAutoUnwrap(meshAbs.toStdString(), unwrapped, params)) {
-                finalMesh = QString::fromStdString(unwrapped);
+        if (autoUnwrap && !useTilingMesh && isAssetTexturing && !meshAbs.isEmpty()) {
+            if (m_tools.GetBlenderExecutable().empty()) {
+                unwrapNote = "Auto-unwrap was skipped: no Blender executable is "
+                             "configured (Settings > Paths).";
+                m_logger.Warning(unwrapNote);
             } else {
-                m_logger.Warning("Auto-unwrap failed, using original mesh.");
+                progress.setLabelText("Auto-unwrapping mesh with Blender...");
+                QCoreApplication::processEvents();
+
+                ExternalTools::UnwrapParams params;
+                {
+                    params.angleLimit = settings.value("BlenderSmartUVAngleLimit", 66.0).toDouble();
+                    params.islandMargin = settings.value("BlenderSmartUVIslandMargin", 0.003).toDouble();
+                    params.areaWeight = settings.value("BlenderSmartUVAreaWeight", 0.0).toDouble();
+                    params.stretchToBounds = settings.value("BlenderSmartUVStretchToBounds", false).toBool();
+                }
+
+                std::string unwrapped;
+                if (m_tools.RunAutoUnwrap(meshAbs.toStdString(), unwrapped, params)) {
+                    // Move the unwrapped OBJ out of %TEMP% into the persistent
+                    // MeshCache: this path is saved as LinkedMeshPath and Push
+                    // needs it to still exist days later (a temp-dir copy
+                    // vanishes on cleanup and would break the export bind).
+                    const QString tempMesh = QString::fromStdString(unwrapped);
+                    const QString cacheDir = MeshCacheDirFor(meshAbs);
+                    QDir().mkpath(cacheDir);
+                    const QString cached = QDir(cacheDir).filePath(
+                        QFileInfo(meshAbs).completeBaseName() + "_unwrapped.obj");
+                    QFile::remove(cached);
+                    if (QFile::copy(tempMesh, cached)) {
+                        QFile::remove(tempMesh);
+                        finalMesh = cached;
+                    } else {
+                        m_logger.Warning("Could not move the unwrapped mesh into MeshCache; "
+                                         "using the temp copy: " + tempMesh);
+                        finalMesh = tempMesh;
+                    }
+                } else {
+                    unwrapNote = "Auto-unwrap with Blender failed; the original mesh "
+                                 "(with its original UVs) was used instead. Details "
+                                 "are in the plugin log.";
+                    m_logger.Warning(unwrapNote);
+                }
             }
         }
+
+        // Materialize Image: download the material's current Remix texture so
+        // the wizard can select it as the image to materialize. Any failure
+        // aborts BEFORE the wizard opens, with an actionable message.
+        QString materializeImage;
+        if (tpl == ProjectTemplate::MaterializeImage) {
+            progress.setLabelText("Downloading the material's texture from Remix...");
+            QCoreApplication::processEvents();
+            QString imgErr;
+            if (!PrepareMaterializeSourceImage(materialPrim, materializeImage, imgErr)) {
+                progress.close();
+                QMessageBox::warning(nullptr, kPluginName,
+                                     "Pull From Remix failed:\n\n" + imgErr);
+                return;
+            }
+            m_logger.Info("Materialize source image ready: " + materializeImage);
+        }
+
+        // Cancel check BEFORE persisting anything: cancelling here must not
+        // silently relink Push to a new material while the old project is open.
+        if (progress.wasCanceled()) { progress.close(); return; }
 
         // Cache link state.
         m_linkedMaterialPrim = materialPrim.toStdString();
         m_linkedMeshPath = finalMesh.toStdString();
         settings.setValue("LinkedMaterialPrim", materialPrim);
         settings.setValue("LinkedMeshPath", finalMesh);
+        settings.setValue("LinkedProjectTemplate", QLatin1String(tplCfg.settingsValue));
+        if (tpl == ProjectTemplate::MaterializeImage) {
+            settings.setValue("LinkedImagePath", materializeImage);
+        } else {
+            settings.remove("LinkedImagePath");
+        }
 
-        // Register external folder so the mesh is easy to find in InstaMAT's library picker.
-        m_instaMAT.RegisterExternalAssetFolder(QFileInfo(finalMesh).dir().absolutePath().toStdString().c_str());
+        // Register external folder so the mesh is easy to find in InstaMAT's
+        // library picker (the Materialize image folder is registered by
+        // PrepareMaterializeSourceImage).
+        if (!finalMesh.isEmpty()) {
+            m_instaMAT.RegisterExternalAssetFolder(
+                QFileInfo(finalMesh).dir().absolutePath().toStdString().c_str());
+        }
 
-        if (QGuiApplication::clipboard()) QGuiApplication::clipboard()->setText(finalMesh);
+        const QString clipboardPath =
+            (tpl == ProjectTemplate::MaterializeImage) ? materializeImage : finalMesh;
+        if (!clipboardPath.isEmpty() && QGuiApplication::clipboard())
+            QGuiApplication::clipboard()->setText(clipboardPath);
 
-        // Step 2: Drive InstaMAT's New Project dialog so the mesh opens as an
-        // Asset Texturing project automatically (Substance2Remix-style).
+        // Step 2: Drive InstaMAT's New Project dialog so the chosen template
+        // opens automatically (Substance2Remix-style, extended to templates).
         if (progress.wasCanceled()) { progress.close(); return; }
         progress.setLabelText("Creating InstaMAT project...");
         progress.setValue(2);
         QCoreApplication::processEvents();
 
-        const QString suggestedProjectName = QFileInfo(finalMesh).completeBaseName();
+        const QString recipeTarget =
+            (tpl == ProjectTemplate::MaterializeImage) ? materializeImage
+            : (tpl == ProjectTemplate::ElementGraph)   ? QString()
+                                                       : finalMesh;
         QString recipeErr;
         bool projectTypeUncertain = false;
         auto recipeFileLog = [this](const QString& s) { m_logger.Info("Recipe: " + s); };
-        const bool projectCreated = TryCreateTexturingProjectFromMesh(
-            finalMesh, suggestedProjectName, &recipeErr, &projectTypeUncertain, recipeFileLog);
+        const bool projectCreated = TryCreateProjectFromTemplate(
+            tplCfg, recipeTarget, &recipeErr, &projectTypeUncertain, recipeFileLog);
 
         progress.setValue(3);
         progress.close();
 
         if (projectCreated) {
-            m_logger.Info(QString("Auto-create project succeeded for mesh: %1").arg(finalMesh));
+            m_logger.Info(QString("Auto-create '%1' project succeeded (target: %2)")
+                              .arg(QString::fromUtf8(tplCfg.displayName),
+                                   recipeTarget.isEmpty() ? QStringLiteral("(none)") : recipeTarget));
             if (projectTypeUncertain) {
-                m_logger.Warning("Project type could not be confirmed as Asset Texturing — "
-                                 "the recipe fell back to the first project-type tile "
-                                 "(possibly Material Layering).");
+                m_logger.Warning(QString("Project type could not be confirmed as %1 — "
+                                         "the recipe fell back to the first project-type tile "
+                                         "(possibly Material Layering).")
+                                     .arg(QString::fromUtf8(tplCfg.displayName)));
             }
 
             QStringList summary;
-            summary << "Project created and linked to Remix.";
+            summary << QString("%1 project created and linked to Remix.")
+                           .arg(QString::fromUtf8(tplCfg.displayName));
             summary << "";
             summary << QString("Material: %1").arg(materialPrim);
-            summary << QString("Mesh: %1").arg(QFileInfo(finalMesh).fileName());
+            if (!finalMesh.isEmpty())
+                summary << QString("Mesh: %1").arg(QFileInfo(finalMesh).fileName());
+            if (tpl == ProjectTemplate::MaterializeImage)
+                summary << QString("Image: %1").arg(QFileInfo(materializeImage).fileName());
             summary << "";
             summary << "Use 'Import Textures from Remix' to pull this material's "
                        "textures when you want them.";
+            if (tpl == ProjectTemplate::ElementGraph) {
+                summary << "";
+                summary << "Tip: name your graph outputs after PBR channels (Base "
+                           "Color, Roughness, Metallic, Normal, Height, Emissive, "
+                           "Transmittance, ...) so Push To Remix can find them. The "
+                           "pulled mesh folder is registered in the Asset Browser.";
+            }
+            if (!unwrapNote.isEmpty()) {
+                summary << "";
+                summary << "Note: " + unwrapNote;
+            }
             if (projectTypeUncertain) {
                 summary << "";
-                summary << "Note: the project type could not be auto-confirmed as "
-                           "'Asset Texturing'. InstaMAT may have created a 'Material "
-                           "Layering' project instead. Painting and Push To Remix still "
-                           "work as normal.";
+                summary << QString("Note: the project type could not be auto-confirmed as "
+                                   "'%1'. InstaMAT may have created a different project "
+                                   "type. Painting and Push To Remix still work as normal.")
+                               .arg(QString::fromUtf8(tplCfg.displayName));
             }
             QMessageBox::information(nullptr, kPluginName, summary.join("\n"));
         } else {
             m_logger.Warning(QString("Auto-create project failed: %1").arg(recipeErr));
 
-            // Fallback: the mesh path is already on the clipboard; open its
+            // Fallback: the target path is already on the clipboard; open its
             // folder so the user can create the project manually.
-            const QString meshDir = QFileInfo(finalMesh).dir().absolutePath();
+            const QString fallbackAsset =
+                recipeTarget.isEmpty() ? finalMesh : recipeTarget;
             QMessageBox::warning(
                 nullptr, kPluginName,
-                QString("Pull From Remix: the project could not be created automatically:\n\n"
-                        "%1\n\n"
-                        "The mesh path was copied to your clipboard and its folder was "
-                        "opened in Explorer:\n%2\n\n"
-                        "Create a project manually (File > New) and pick the mesh, then "
+                QString("Pull From Remix: the %1 project could not be created "
+                        "automatically:\n\n%2\n\n"
+                        "%3"
+                        "Create the project manually (File > New), then "
                         "use 'Import Textures from Remix' as usual. "
                         "Details are in the plugin log.")
-                    .arg(recipeErr.section('\n', 0, 0), finalMesh));
-            QDesktopServices::openUrl(QUrl::fromLocalFile(meshDir));
+                    .arg(QString::fromUtf8(tplCfg.displayName),
+                         recipeErr.section('\n', 0, 0),
+                         fallbackAsset.isEmpty()
+                             ? QString()
+                             : QString("The asset path was copied to your clipboard and its "
+                                       "folder was opened in Explorer:\n%1\n\n").arg(fallbackAsset)));
+            if (!fallbackAsset.isEmpty()) {
+                QDesktopServices::openUrl(QUrl::fromLocalFile(
+                    QFileInfo(fallbackAsset).dir().absolutePath()));
+            }
         }
+    }
+
+    bool RemixConnector::PrepareMaterializeSourceImage(const QString& materialPrim,
+                                                       QString&       outImageAbs,
+                                                       QString&       outErr) {
+        outImageAbs.clear();
+        outErr.clear();
+
+        QString remixDirAbs;
+        QString dirErr;
+        if (!GetRemixDefaultDirectory(remixDirAbs, dirErr)) {
+            outErr = "Could not determine the Remix project directory:\n" + dirErr;
+            return false;
+        }
+
+        const QString encodedMat = UrlEncodeKeepSlashes(NormalizePathSlashes(materialPrim));
+        QString apiErr;
+        const QJsonDocument doc = RequestJson(
+            "GET", QString("/stagecraft/assets/%1/textures").arg(encodedMat),
+            {}, nullptr, &apiErr);
+        if (!doc.isObject()) {
+            outErr = "Could not list the material's textures:\n" + apiErr;
+            return false;
+        }
+        const QJsonArray textures = doc.object().value("textures").toArray();
+
+        // Prefer the albedo/diffuse texture; fall back to transmittance (glass
+        // materials have no diffuse), then to the first texture at all.
+        QJsonValue chosen;
+        for (const QString& wanted : {QStringLiteral("albedo"), QStringLiteral("transmittance")}) {
+            for (const QJsonValue& entry : textures) {
+                if (!entry.isArray()) continue;
+                const QJsonArray pair = entry.toArray();
+                if (pair.size() < 2 || !pair.at(0).isString()) continue;
+                if (ResolveCanonicalChannel(pair.at(0).toString()) == wanted) {
+                    chosen = entry;
+                    break;
+                }
+            }
+            if (!chosen.isNull() && !chosen.isUndefined()) break;
+        }
+        if ((chosen.isNull() || chosen.isUndefined()) && !textures.isEmpty())
+            chosen = textures.first();
+        if (chosen.isNull() || chosen.isUndefined()) {
+            outErr = QString("The material has no textures to materialize:\n%1\n\n"
+                             "Assign a texture in RTX Remix first, or pull with the "
+                             "Asset Texturing template instead.").arg(materialPrim);
+            return false;
+        }
+
+        // Download/convert just that one texture into the Pulled Textures dir.
+        const QString destDir = GetPulledTexturesDir(remixDirAbs);
+        QJsonArray single;
+        single.append(chosen);
+        QVector<ChannelEntry> entries;
+        int pulled = 0, converted = 0;
+        DownloadAndConvertTextureList(single, remixDirAbs, destDir,
+                                      NamingPolicy::CanonicalChannelOrOriginal,
+                                      nullptr, entries, pulled, converted);
+        if (pulled == 0 || entries.isEmpty()) {
+            outErr = QString("Could not download/convert the material's texture. ");
+            if (m_tools.GetTexconvExecutable().empty()) {
+                outErr += "texconv.exe was not found — set it in Settings > Paths. ";
+            }
+            outErr += "Details are in the plugin log:\n" + GetLogFilePath();
+            return false;
+        }
+
+        // Rename to a material-specific stem: the wizard's asset list is
+        // matched BY FILENAME, and a generic "albedo.png" could collide with
+        // files from other registered folders.
+        QString root = DeriveDesiredRootFromPrim(materialPrim);
+        if (root.isEmpty()) root = "pulled";
+        const QString srcPath = QDir(destDir).filePath(entries.first().filename);
+        const QFileInfo srcInfo(srcPath);
+        const QString distinct = QDir(destDir).filePath(
+            QString("%1_materialize.%2").arg(root, srcInfo.suffix().isEmpty()
+                                                       ? QStringLiteral("png")
+                                                       : srcInfo.suffix()));
+        QFile::remove(distinct);
+        if (QFile::rename(srcPath, distinct)) {
+            outImageAbs = QDir::cleanPath(distinct);
+        } else {
+            m_logger.Warning("Could not rename the materialize image to a distinct "
+                             "name; using " + srcPath);
+            outImageAbs = QDir::cleanPath(srcPath);
+        }
+
+        // Make the folder pickable in the wizard's asset popup.
+        m_instaMAT.RegisterExternalAssetFolder(destDir.toStdString().c_str());
+        return true;
     }
 
     bool RemixConnector::DownloadAndConvertTextureList(const QJsonArray& textures,
@@ -2095,6 +2536,11 @@ namespace InstaMAT2Remix {
             return false;
         }
 
+        // Two textures can map to the same canonical channel (e.g. two albedo
+        // inputs); keep the first under the canonical name and fall back to
+        // the original filename for later ones instead of silently
+        // overwriting.
+        QSet<QString> usedNames;
         int idx = 0;
         for (const QJsonValue& entry : textures) {
             if (progress && progress->wasCanceled()) break;
@@ -2139,7 +2585,8 @@ namespace InstaMAT2Remix {
                 if (m_tools.ConvertDdsToPng(absTex.toStdString(), destDir.toStdString(), pngOut)) {
                     QString writtenPath = QString::fromStdString(pngOut);
                     QString writtenName = QFileInfo(writtenPath).fileName();
-                    if (!canonicalChannel.isEmpty()) {
+                    if (!canonicalChannel.isEmpty()
+                        && !usedNames.contains(canonicalChannel + ".png")) {
                         const QString desired = canonicalChannel + ".png";
                         const QString desiredPath = QDir(destDir).filePath(desired);
                         if (desiredPath != writtenPath) {
@@ -2149,8 +2596,11 @@ namespace InstaMAT2Remix {
                             } else {
                                 m_logger.Warning(QString("Could not rename %1 -> %2").arg(writtenPath, desiredPath));
                             }
+                        } else {
+                            writtenName = desired;
                         }
                     }
+                    usedNames.insert(writtenName);
                     outConvertedCount++;
                     outPulledCount++;
                     outEntries.append({usdAttr, canonicalChannel, writtenName});
@@ -2168,6 +2618,8 @@ namespace InstaMAT2Remix {
             } else {
                 destName = origName;
             }
+            if (usedNames.contains(destName)) destName = origName; // keep both files
+            usedNames.insert(destName);
             const QString destPath = QDir(destDir).filePath(destName);
             QFile::remove(destPath);
             if (QFile::copy(absTex, destPath)) {
@@ -2180,6 +2632,9 @@ namespace InstaMAT2Remix {
     }
 
     bool RemixConnector::ImportTexturesFromRemix() {
+        if (WarnIfBusy(m_operationInProgress)) return false;
+        const BusyGuard busy(m_operationInProgress);
+
         QSettings settings("InstaMAT2Remix", "Config");
 
         QString materialPrim = settings.value("LinkedMaterialPrim", "").toString();
@@ -2216,7 +2671,8 @@ namespace InstaMAT2Remix {
             return false;
         }
 
-        QProgressDialog progress("Importing textures from RTX Remix...", "Cancel", 0, textures.size(), nullptr);
+        QProgressDialog progress("Importing textures from RTX Remix...", "Cancel", 0, textures.size(),
+                                 FindHostMainWindow());
         progress.setWindowTitle(kPluginName);
         progress.setWindowModality(Qt::WindowModal);
         progress.setMinimumDuration(0);
@@ -2240,16 +2696,32 @@ namespace InstaMAT2Remix {
         if (pulledCount > 0) m_instaMAT.RegisterExternalAssetFolder(destDir.toStdString().c_str());
 
         if (progress.wasCanceled()) {
-            QMessageBox::information(nullptr, kPluginName, "Import cancelled.");
+            QString msg = "Import cancelled.";
+            if (pulledCount > 0) {
+                msg += QString("\n\n%1 texture(s) were already saved to:\n%2")
+                           .arg(pulledCount).arg(destDir);
+            }
+            QMessageBox::information(nullptr, kPluginName, msg);
             return false;
         }
 
-        if (pulledCount > 0) {
-            QDesktopServices::openUrl(QUrl::fromLocalFile(destDir));
+        // Nothing imported: this is a failure, not a success with a zero in it.
+        if (pulledCount == 0) {
+            QString msg = QString("No textures could be imported for the material:\n%1\n\n")
+                              .arg(materialPrim);
+            if (m_tools.GetTexconvExecutable().empty()) {
+                msg += "texconv.exe was not found, so Remix's DDS textures cannot be "
+                       "converted. Set 'texconv.exe' in Settings > Paths, then try "
+                       "again.\n\n";
+            }
+            msg += "Details are in the plugin log:\n" + GetLogFilePath();
+            QMessageBox::warning(nullptr, kPluginName, msg);
+            return false;
         }
 
-        QMessageBox::information(
-            nullptr, kPluginName,
+        QDesktopServices::openUrl(QUrl::fromLocalFile(destDir));
+
+        QString summary =
             QString("Imported %1 texture(s) from RTX Remix (%2 converted from DDS).\n\n"
                     "Saved to:\n%3\n\n"
                     "The folder is registered in InstaMAT's Asset Browser and was opened "
@@ -2258,16 +2730,154 @@ namespace InstaMAT2Remix {
                     "matching channel (albedo → Base Color, normal → Normal, ...).")
                 .arg(pulledCount)
                 .arg(convertedCount)
-                .arg(destDir));
-        return pulledCount > 0;
+                .arg(destDir);
+        if (pulledCount < textures.size()) {
+            summary += QString("\n\nNote: %1 of %2 texture(s) could not be imported — "
+                               "see the plugin log for the reasons.")
+                           .arg(textures.size() - pulledCount)
+                           .arg(textures.size());
+        }
+        QMessageBox::information(nullptr, kPluginName, summary);
+        return true;
     }
 
     QString RemixConnector::PreIngestStageDir() {
         return QDir::cleanPath(QDir(QDir::tempPath()).filePath("InstaMAT2Remix_PreIngest"));
     }
 
+    bool RemixConnector::IsSafeToWipe(const QString& dirPath) {
+        const QString p = QDir::cleanPath(dirPath.trimmed());
+        // QDir("") means the process working directory — never wipe that.
+        if (p.isEmpty() || !QDir::isAbsolutePath(p)) return false;
+        if (QDir(p).isRoot()) return false;
+
+        QStringList protectedDirs;
+        protectedDirs << QDir::homePath()
+                      << QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)
+                      << QStandardPaths::writableLocation(QStandardPaths::DesktopLocation)
+                      << QStandardPaths::writableLocation(QStandardPaths::DownloadLocation)
+                      << QStandardPaths::writableLocation(QStandardPaths::PicturesLocation)
+                      << QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+        for (const QString& prot : protectedDirs) {
+            if (prot.isEmpty()) continue;
+            if (QString::compare(QDir::cleanPath(prot), p, Qt::CaseInsensitive) == 0)
+                return false;
+        }
+        return true;
+    }
+
     QString RemixConnector::DefaultLayerProjectDir() {
-        return QDir::cleanPath(QDir::homePath() + "/Documents/InstaMAT/Library");
+        // Resolve Documents via the shell known folder — on Windows 11 the
+        // Documents folder is commonly OneDrive-redirected and is NOT
+        // %USERPROFILE%\Documents; Studio writes its Library to the redirected
+        // location.
+        QString docs = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+        if (docs.isEmpty()) docs = QDir::homePath() + "/Documents";
+        return QDir::cleanPath(docs + "/InstaMAT/Library");
+    }
+
+    QString RemixConnector::ResolveIngestValidationType(const QString& pbrType,
+                                                        const QString& normalEncoding) {
+        const QString t = pbrType.trimmed().toLower();
+        if (t == QLatin1String("normal")) {
+            const QString e = normalEncoding.trimmed().toLower();
+            if (e == QLatin1String("ogl")) return QStringLiteral("NORMAL_OGL");
+            if (e == QLatin1String("oth")) return QStringLiteral("NORMAL_OTH");
+            return QStringLiteral("NORMAL_DX");
+        }
+        // OTHER = raw colorspace, the safe default for unrecognized channels
+        // (the old DIFFUSE default sRGB-converted linear data).
+        return kPbrToIngestValidation.value(t, QStringLiteral("OTHER"));
+    }
+
+    RemixConnector::RemixMaterialKind
+    RemixConnector::ClassifyMaterialFromTextureAttrs(const QStringList& usdAttrs) {
+        bool sawOpaqueMarker = false;
+        for (const QString& attr : usdAttrs) {
+            const QString suffix = attr.section(':', -1).trimmed().toLower();
+            // Exact equality: the opaque SSS input is
+            // subsurface_transmittance_texture and must NOT classify as glass.
+            if (suffix == QLatin1String("transmittance_texture")) {
+                return RemixMaterialKind::Translucent;
+            }
+            if (suffix == QLatin1String("diffuse_texture") ||
+                suffix.startsWith(QLatin1String("albedo")) ||
+                suffix == QLatin1String("reflectionroughness_texture") ||
+                suffix == QLatin1String("metallic_texture") ||
+                suffix == QLatin1String("height_texture") ||
+                suffix.startsWith(QLatin1String("subsurface_"))) {
+                sawOpaqueMarker = true;
+            }
+        }
+        return sawOpaqueMarker ? RemixMaterialKind::Opaque : RemixMaterialKind::Unknown;
+    }
+
+    QJsonArray RemixConnector::BuildTexturePutPairs(const QString& materialPrim,
+                                                    const QHash<QString, QString>& ingestedPaths,
+                                                    bool translucent,
+                                                    QStringList* outSkipped) {
+        if (outSkipped) outSkipped->clear();
+        QJsonArray pairs;
+        for (const auto& spec : kDefaultPbrSpecs) {
+            if (!ingestedPaths.contains(spec.pbrType)) continue;
+            const QString& mdl = translucent ? spec.mdlInputTranslucent : spec.mdlInputOpaque;
+            if (mdl.isEmpty()) {
+                if (outSkipped) outSkipped->append(spec.pbrType);
+                continue;
+            }
+            const QString usdAttr = NormalizePathSlashes(materialPrim) + "/Shader.inputs:" + mdl;
+            QJsonArray pair;
+            pair.append(usdAttr);
+            pair.append(NormalizePathSlashes(ingestedPaths.value(spec.pbrType)));
+            pairs.append(pair);
+        }
+        return pairs;
+    }
+
+    bool RemixConnector::MergeOpacityIntoAlbedoAlpha(const QString& albedoPath,
+                                                     const QString& opacityPath,
+                                                     QString&       outMergedPngPath,
+                                                     QString&       outErr) {
+        outMergedPngPath.clear();
+        outErr.clear();
+
+        QImage albedo(albedoPath);
+        if (albedo.isNull()) {
+            outErr = "Could not load albedo image: " + albedoPath;
+            return false;
+        }
+        QImage opacity(opacityPath);
+        if (opacity.isNull()) {
+            outErr = "Could not load opacity image: " + opacityPath;
+            return false;
+        }
+
+        albedo = albedo.convertToFormat(QImage::Format_ARGB32);
+        if (opacity.size() != albedo.size()) {
+            opacity = opacity.scaled(albedo.size(), Qt::IgnoreAspectRatio,
+                                     Qt::SmoothTransformation);
+        }
+        opacity = opacity.convertToFormat(QImage::Format_ARGB32);
+
+        for (int y = 0; y < albedo.height(); ++y) {
+            QRgb* dst = reinterpret_cast<QRgb*>(albedo.scanLine(y));
+            const QRgb* src = reinterpret_cast<const QRgb*>(opacity.constScanLine(y));
+            for (int x = 0; x < albedo.width(); ++x) {
+                dst[x] = qRgba(qRed(dst[x]), qGreen(dst[x]), qBlue(dst[x]),
+                               qGray(src[x]));
+            }
+        }
+
+        // Always PNG: jpg has no alpha and QImage cannot write tga. The ingest
+        // converts to DDS regardless of the source container.
+        const QFileInfo fi(albedoPath);
+        const QString merged = fi.dir().filePath(fi.completeBaseName() + "_merged.png");
+        if (!albedo.save(merged, "PNG")) {
+            outErr = "Could not write merged albedo PNG: " + merged;
+            return false;
+        }
+        outMergedPngPath = merged;
+        return true;
     }
 
     bool RemixConnector::FindMostRecentLayerPackageIn(const QString& dirPath,
@@ -2403,7 +3013,9 @@ namespace InstaMAT2Remix {
         outIngested.clear();
         outIngestErr.clear();
 
-        const QString validationType = kPbrToIngestValidation.value(pbrType.toLower(), "DIFFUSE");
+        QSettings ingestSettings("InstaMAT2Remix", "Config");
+        const QString validationType = ResolveIngestValidationType(
+            pbrType, ingestSettings.value("NormalMapEncoding", "dx").toString());
         const QString absTexture = NormalizePathSlashes(QFileInfo(texturePath).absoluteFilePath());
         const QString outDirApi = NormalizePathSlashes(QFileInfo(targetIngestDirAbs).absoluteFilePath());
 
@@ -2658,6 +3270,58 @@ namespace InstaMAT2Remix {
         return true;
     }
 
+    RemixConnector::WorkerRunParse RemixConnector::ParseWorkerStdout(const QString& mergedOutput) {
+        WorkerRunParse parse;
+        for (const QString& rawLine : mergedOutput.split('\n')) {
+            const QString line = rawLine.trimmed();
+            if (line.isEmpty()) continue;
+            if (!line.startsWith("IM2RX ")) {
+                parse.engineTail << line;
+                while (parse.engineTail.size() > 15) parse.engineTail.removeFirst();
+                continue;
+            }
+            const QString msg = line.mid(6);
+            parse.protocolLines << msg;
+            if (msg.startsWith("CHANNEL=")) {
+                const QString value = msg.mid(8); // canonical:filename
+                const int colon = value.indexOf(':');
+                if (colon > 0) parse.channelFiles.append(value.mid(colon + 1).trimmed());
+            } else if (msg.startsWith("COLLAPSED=")) {
+                parse.collapsed = (msg.mid(10).trimmed() == "1");
+            } else if (msg.startsWith("FINALSIZE=")) {
+                parse.finalSize = msg.mid(10).trimmed();
+            } else if (msg.startsWith("GRAPHTYPE=")) {
+                parse.graphType = msg.mid(10).trimmed();
+            } else if (msg.startsWith("FATAL=")) {
+                parse.fatalReason = msg.mid(6).trimmed();
+            } else if (msg.startsWith("OUTPUTFALLBACK ")) {
+                // OUTPUTFALLBACK name='<name>' canonical=albedo
+                const int start = msg.indexOf("name='");
+                const int end = msg.lastIndexOf("' canonical=");
+                if (start >= 0 && end > start + 6)
+                    parse.fallbackOutputName = msg.mid(start + 6, end - (start + 6));
+            } else if (msg.startsWith("ERROR=")) {
+                parse.error = msg.mid(6);
+            }
+        }
+        return parse;
+    }
+
+    bool RemixConnector::ShouldRetryWorkerFailure(const QString& fatalReason) {
+        // No FATAL= line (legacy worker, crash, timeout) → possibly the
+        // per-process render race → a fresh process is an independent draw.
+        return fatalReason.isEmpty();
+    }
+
+    QString RemixConnector::WorkerErrorTip(const QString& fatalReason) {
+        if (fatalReason == "outputs") {
+            return QString("Tip: name your graph outputs after PBR channels (%1), "
+                           "save (Ctrl+S) and push again.")
+                .arg(QString::fromUtf8(InstaMAT2Remix::PbrOutputNamesHint()));
+        }
+        return QString();
+    }
+
     bool RemixConnector::ExportActiveLayeringProject(const QString& outDir,
                                                      QStringList&   outChannelFiles,
                                                      QString&       outError) {
@@ -2665,6 +3329,8 @@ namespace InstaMAT2Remix {
         outError.clear();
         m_exportHadCollapse = false;
         m_lastExportSize.clear();
+        m_exportGraphTypeNote.clear();
+        m_exportAlbedoFallbackNote.clear();
 
         if (!QDir().mkpath(outDir)) {
             outError = QString("Could not create export directory: %1").arg(outDir);
@@ -2770,23 +3436,52 @@ namespace InstaMAT2Remix {
                  << "--out" << outDir
                  << "--format" << fileFormat
                  << "--studio" << QCoreApplication::applicationDirPath();
+        // The worker MUST bind the mesh from raw file bytes: the package's own
+        // pkg:///file:// mesh bindings do not resolve in a standalone SDK
+        // process and Execute then "succeeds" with blank outputs (see
+        // CLAUDE.md). A missing mesh is fatal only for mesh-based templates
+        // (Asset Texturing); Element Graph / Materialize projects may have no
+        // ElementMesh input at all — the worker's Inherit rung passes those
+        // through and refuses inherited pkg:// binds when a mesh input exists.
+        const QString linkedTemplate =
+            settings.value("LinkedProjectTemplate", "asset_texturing").toString().trimmed().toLower();
+        const bool meshRequired =
+            linkedTemplate.isEmpty() || linkedTemplate == QLatin1String("asset_texturing");
         const QString meshAbs = QString::fromStdString(m_linkedMeshPath);
         if (!meshAbs.isEmpty() && QFileInfo::exists(meshAbs)) {
             baseArgs << "--mesh" << meshAbs;
+        } else if (meshRequired) {
+            outError = meshAbs.isEmpty()
+                ? QString("No linked mesh is recorded for this project. Use 'Pull From "
+                          "Remix' to link a mesh, then push again.")
+                : QString("The linked mesh file no longer exists:\n  %1\n\n"
+                          "Use 'Pull From Remix' to relink it, then push again. "
+                          "(Exporting without the mesh would produce blank textures.)")
+                      .arg(meshAbs);
+            return false;
         } else {
-            m_logger.Warning("ExportActive: linked mesh path missing (" + meshAbs +
-                             ") — the worker will fall back to the package's own mesh binding.");
+            m_logger.Info(QString("ExportActive: no mesh file for template '%1' — the "
+                                  "graph binds its own inputs.").arg(linkedTemplate));
+        }
+        // Materialize projects: bytes-bind the pulled source image too, in
+        // case the package's own image binding doesn't resolve standalone.
+        const QString imageAbs = settings.value("LinkedImagePath", "").toString();
+        if (!imageAbs.isEmpty() && QFileInfo::exists(imageAbs)) {
+            baseArgs << "--image" << imageAbs;
         }
 
         // One worker invocation at the given size (0,0 = worker resolves the
         // baked size). Fills channelFiles; sets outCollapsed when the worker
         // reported a render race (some channels came out 1x1).
+        QString workerGraphType;     // "layer" | "element" | "materialize" (from GRAPHTYPE=)
+        QString fallbackOutputName;  // OUTPUTFALLBACK: lone output exported as albedo
         auto runWorkerOnce = [&](int reqW, int reqH, QStringList& channelFiles,
                                  bool& outCollapsed, QString& outFinalSize,
-                                 QString& runError) -> bool {
+                                 QString& runError, QString& outFatalReason) -> bool {
             channelFiles.clear();
             outCollapsed = false;
             outFinalSize.clear();
+            outFatalReason.clear();
 
             QStringList args = baseArgs;
             args << "--width" << QString::number(reqW) << "--height" << QString::number(reqH);
@@ -2821,37 +3516,25 @@ namespace InstaMAT2Remix {
             }
 
             const QString output = QString::fromUtf8(proc.readAllStandardOutput());
-            QString workerError;
-            QStringList engineTail;
-            for (const QString& rawLine : output.split('\n')) {
-                const QString line = rawLine.trimmed();
-                if (line.isEmpty()) continue;
-                if (!line.startsWith("IM2RX ")) {
-                    engineTail << line;
-                    while (engineTail.size() > 15) engineTail.removeFirst();
-                    continue;
-                }
-                const QString msg = line.mid(6);
+            const WorkerRunParse parsed = ParseWorkerStdout(output);
+            for (const QString& msg : parsed.protocolLines) {
                 m_logger.Info("ExportWorker: " + msg);
-                if (msg.startsWith("CHANNEL=")) {
-                    const QString value = msg.mid(8); // canonical:filename
-                    const int colon = value.indexOf(':');
-                    if (colon > 0) channelFiles.append(value.mid(colon + 1).trimmed());
-                } else if (msg.startsWith("COLLAPSED=")) {
-                    outCollapsed = (msg.mid(10).trimmed() == "1");
-                } else if (msg.startsWith("FINALSIZE=")) {
-                    outFinalSize = msg.mid(10).trimmed();
-                } else if (msg.startsWith("ERROR=")) {
-                    workerError = msg.mid(6);
-                }
             }
+            channelFiles = parsed.channelFiles;
+            outCollapsed = parsed.collapsed;
+            outFinalSize = parsed.finalSize;
+            outFatalReason = parsed.fatalReason;
+            if (!parsed.graphType.isEmpty()) workerGraphType = parsed.graphType;
+            if (!parsed.fallbackOutputName.isEmpty())
+                fallbackOutputName = parsed.fallbackOutputName;
 
             const bool exitedOk =
                 (proc.exitStatus() == QProcess::NormalExit && proc.exitCode() == 0);
             if (!exitedOk || channelFiles.isEmpty()) {
-                for (const QString& line : engineTail) {
+                for (const QString& line : parsed.engineTail) {
                     m_logger.Warning("ExportWorker(engine): " + line);
                 }
+                QString workerError = parsed.error;
                 if (workerError.isEmpty()) {
                     workerError = (proc.exitStatus() != QProcess::NormalExit)
                         ? QString("the export worker crashed")
@@ -2871,42 +3554,57 @@ namespace InstaMAT2Remix {
         // (2) step the size DOWN via fresh processes — 2048, 1024, 512 — until a
         // clean render. Stepping in a fresh process avoids the in-process
         // backend corruption that same-process size changes caused. We keep the
-        // FIRST clean render; if none is clean we keep the last (best-effort)
-        // and the caller warns the user. The outDir is wiped between attempts.
-        auto parseDim = [](const QString& sz) -> int {
+        // FIRST clean render; if none is clean we keep the last attempt's files
+        // and set m_exportHadCollapse — PushToRemix's collapse guard then
+        // aborts the push. The outDir is wiped between attempts.
+        auto parseSize = [](const QString& sz) -> QSize {
             const int x = sz.indexOf('x');
-            return x > 0 ? sz.left(x).toInt() : 0;
+            if (x <= 0) return QSize();
+            return QSize(sz.left(x).toInt(), sz.mid(x + 1).toInt());
         };
 
-        QList<int> sizeLadder;
+        QList<QSize> sizeLadder;
         // Prefer the user's actual baked/requested size — the collapse odds are
         // roughly size-independent (~30% clean per fresh process on a healthy
         // GPU, measured), so spending draws at the baked size delivers the
         // intended resolution rather than a needlessly smaller one. Step-downs
         // are appended only as a last resort once the baked-size draws are
-        // exhausted. Loop is capped at 6 attempts to bound the worst-case push
-        // time (each worker is ~13 s); it stops at the first clean render, so a
-        // healthy GPU pays only one attempt.
-        for (int i = 0; i < 3; ++i) sizeLadder << exportSize.width();
+        // exhausted (scaled proportionally so non-square exports keep their
+        // aspect ratio). Loop is capped at 6 attempts to bound the worst-case
+        // push time (each worker is ~13 s); it stops at the first clean render,
+        // so a healthy GPU pays only one attempt.
+        for (int i = 0; i < 3; ++i) sizeLadder << exportSize; // may be 0x0 = Auto
 
         QString lastError;
+        QString lastFatalReason;
         bool lastCollapsed = true;
         QString finalSize;
         bool gotClean = false;
         int steppedFloor = 0; // largest step-down already queued
         for (int attempt = 0; attempt < sizeLadder.size() && attempt < 6; ++attempt) {
-            const int reqW = sizeLadder.at(attempt);
+            const QSize req = sizeLadder.at(attempt);
             if (QDir(outDir).exists()) QDir(outDir).removeRecursively();
             QDir().mkpath(outDir);
 
             QStringList channelFiles;
             bool collapsed = false;
             QString runError;
-            const bool ok = runWorkerOnce(reqW, reqW, channelFiles, collapsed, finalSize, runError);
+            QString fatalReason;
+            const bool ok = runWorkerOnce(req.width(), req.height(), channelFiles, collapsed, finalSize, runError, fatalReason);
             if (!ok) {
                 lastError = runError;
                 m_logger.Warning(QString("ExportActive: worker attempt %1 failed: %2")
                                      .arg(attempt + 1).arg(runError));
+                if (!ShouldRetryWorkerFailure(fatalReason)) {
+                    // FATAL= — a fresh process would fail identically (bad
+                    // output naming, missing graph, licensing…). Retrying
+                    // burned 3 spawns (~36 s) on this before 0.0.2.
+                    lastFatalReason = fatalReason;
+                    m_logger.Warning(QString("ExportActive: deterministic worker failure "
+                                             "('%1') — skipping the remaining retries.")
+                                         .arg(fatalReason));
+                    break;
+                }
                 continue; // transient failure — next ladder entry (same size)
             }
             outChannelFiles = channelFiles;
@@ -2920,21 +3618,31 @@ namespace InstaMAT2Remix {
             m_logger.Warning(QString("ExportActive: attempt %1 had collapsed channels (size %2).")
                                  .arg(attempt + 1).arg(finalSize));
 
-            // Queue step-downs once, based on the resolution actually rendered.
+            // Queue step-downs once, based on the resolution actually rendered,
+            // scaling both dimensions so the aspect ratio survives.
             if (steppedFloor == 0) {
-                int base = parseDim(finalSize);
-                if (base <= 0) base = 2048;
-                for (int s = (base > 2048 ? 2048 : base / 2); s >= 512; s /= 2) {
-                    sizeLadder << s;
+                QSize base = parseSize(finalSize);
+                if (base.width() <= 0 || base.height() <= 0) base = QSize(2048, 2048);
+                const int maxDim = qMax(base.width(), base.height());
+                for (int s = (maxDim > 2048 ? 2048 : maxDim / 2); s >= 512; s /= 2) {
+                    const double scale = double(s) / maxDim;
+                    sizeLadder << QSize(qMax(1, qRound(base.width() * scale)),
+                                        qMax(1, qRound(base.height() * scale)));
                 }
                 steppedFloor = 512;
             }
         }
 
         if (outChannelFiles.isEmpty()) {
-            outError = QString("Live export failed: %1. See the plugin log for details: %2")
-                           .arg(lastError.isEmpty() ? "no channels were produced" : lastError,
-                                GetLogFilePath());
+            QString cause = lastError.isEmpty() ? QString("no channels were produced")
+                                                : lastError;
+            // Worker messages end with '.' — chop so the sentence join below
+            // doesn't render "written.. See".
+            while (cause.endsWith(QLatin1Char('.'))) cause.chop(1);
+            outError = QString("Live export failed: %1.\n\nSee the plugin log for details:\n%2")
+                           .arg(cause, GetLogFilePath());
+            const QString tip = WorkerErrorTip(lastFatalReason);
+            if (!tip.isEmpty()) outError += "\n\n" + tip;
             return false;
         }
 
@@ -2958,6 +3666,36 @@ namespace InstaMAT2Remix {
         // surface it so the caller can warn the user in the summary.
         m_exportHadCollapse = (!gotClean && lastCollapsed);
         m_lastExportSize = finalSize;
+
+        if (!fallbackOutputName.isEmpty()) {
+            m_exportAlbedoFallbackNote =
+                QString("Note: the graph's only output ('%1') is not named after a PBR "
+                        "channel, so it was pushed as the Base Color (albedo) map. Rename "
+                        "the output (e.g. Base Color, Roughness, Normal) if it should be a "
+                        "different channel.")
+                    .arg(fallbackOutputName);
+            m_logger.Info(m_exportAlbedoFallbackNote);
+        }
+
+        // Newest-.IMP discovery is type-agnostic: warn when the graph the
+        // worker actually executed doesn't match the template Pull created
+        // (e.g. the user saved a different project since the pull).
+        if (!workerGraphType.isEmpty()) {
+            static const QHash<QString, QString> kTemplateToGraphType = {
+                {"asset_texturing",   "layer"},
+                {"element_graph",     "element"},
+                {"materialize_image", "materialize"},
+            };
+            const QString expected = kTemplateToGraphType.value(linkedTemplate);
+            if (!expected.isEmpty() && workerGraphType != expected) {
+                m_exportGraphTypeNote =
+                    QString("Note: the exported project is a '%1' graph, but the last Pull "
+                            "created a '%2' project. Push always exports the most recently "
+                            "saved project — make sure the right project was saved last.")
+                        .arg(workerGraphType, linkedTemplate);
+                m_logger.Warning(m_exportGraphTypeNote);
+            }
+        }
         if (m_exportHadCollapse) {
             m_logger.Warning("ExportActive: some channels still rendered at 1x1 after all "
                              "size attempts (GPU/driver race — worse under GPU contention).");
@@ -2966,6 +3704,9 @@ namespace InstaMAT2Remix {
     }
 
     void RemixConnector::PushToRemix(bool forceRelinkAndRename) {
+        if (WarnIfBusy(m_operationInProgress)) return;
+        const BusyGuard busy(m_operationInProgress);
+
         QSettings settings("InstaMAT2Remix", "Config");
 
         // 1. Resolve the target material. A normal push targets the material
@@ -3007,8 +3748,25 @@ namespace InstaMAT2Remix {
         //    Mirrors WBC's export_project_textures step. There is NO fallback:
         //    if the export fails, the push fails cleanly with an actionable
         //    reason and nothing is ingested (WBC behavior).
-        const QString exportDir = settings.value(
-            "ExportFolder", QDir::cleanPath(QDir::tempPath() + "/InstaMAT2Remix_Export")).toString();
+        const QString defaultExportDir =
+            QDir::cleanPath(QDir::tempPath() + "/InstaMAT2Remix_Export");
+        QString exportDir = settings.value("ExportFolder", defaultExportDir).toString().trimmed();
+        if (exportDir.isEmpty()) exportDir = defaultExportDir; // QDir("") is the CWD!
+        exportDir = QDir::cleanPath(exportDir);
+        // The export folder is EMPTIED before every push. Refuse to wipe
+        // anything that is clearly not a dedicated folder (drive roots, home,
+        // Documents, ...) — a mis-set path here must never delete user data.
+        if (!IsSafeToWipe(exportDir)) {
+            QMessageBox::warning(nullptr, kPluginName,
+                QString("Push stopped:\n\nThe configured Export Folder is not safe to "
+                        "use:\n  %1\n\nThis folder is emptied on every push, so it must "
+                        "be a dedicated folder (not a drive root, your home folder, "
+                        "Documents, Desktop, Downloads or Pictures).\n\n"
+                        "Choose a different folder in Settings > Paths, or clear the "
+                        "field to restore the default:\n  %2")
+                    .arg(exportDir, defaultExportDir));
+            return;
+        }
         if (QDir(exportDir).exists()) {
             QDir(exportDir).removeRecursively();
         }
@@ -3031,8 +3789,92 @@ namespace InstaMAT2Remix {
             const QString abs = QDir::cleanPath(QDir(exportDir).filePath(filename));
             if (QFileInfo::exists(abs)) exportedFiles.insert(stem, abs);
         }
-        if (!settings.value("IncludeOpacityMap", false).toBool()) {
-            exportedFiles.remove("opacity");
+
+        // 4a. Opacity: Remix reads opacity from the diffuse texture's ALPHA
+        //     channel (AperturePBR has no consumed opacity_texture input).
+        //     When enabled and both maps exist, merge opacity into albedo's
+        //     alpha; the standalone opacity file is never pushed.
+        if (settings.value("IncludeOpacityMap", false).toBool()
+            && exportedFiles.contains("opacity") && exportedFiles.contains("albedo")) {
+            QString mergedPath;
+            QString mergeErr;
+            if (MergeOpacityIntoAlbedoAlpha(exportedFiles.value("albedo"),
+                                            exportedFiles.value("opacity"),
+                                            mergedPath, mergeErr)) {
+                exportedFiles.insert("albedo", mergedPath);
+                m_logger.Info("Merged the opacity map into the albedo alpha channel for push.");
+            } else {
+                m_logger.Warning("Opacity merge failed (" + mergeErr +
+                                 ") — pushing albedo without merged opacity.");
+            }
+        }
+        exportedFiles.remove("opacity");
+
+        // 4b. Channels Remix has no texture input for at all (ao, ...): the
+        //     exported file stays on disk but is not pushed.
+        QStringList skippedNoRemixInput;
+        {
+            QSet<QString> pushable;
+            for (const auto& spec : kDefaultPbrSpecs) pushable.insert(spec.pbrType);
+            for (auto it = exportedFiles.begin(); it != exportedFiles.end();) {
+                if (!pushable.contains(it.key())) {
+                    skippedNoRemixInput << it.key();
+                    it = exportedFiles.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+        if (!skippedNoRemixInput.isEmpty()) {
+            m_logger.Info("Not pushed (no Remix texture input): " + skippedNoRemixInput.join(", "));
+        }
+
+        // 4c. Opaque vs translucent target: AperturePBR_Translucent consumes
+        //     only transmittance/emissive/normal, so skip the rest up front
+        //     (each ingest is a long-running call — don't waste them).
+        bool materialIsTranslucent = false;
+        {
+            const QString encodedMat = UrlEncodeKeepSlashes(NormalizePathSlashes(materialPrim));
+            QString texErr;
+            const QJsonDocument texDoc = RequestJson(
+                "GET", QString("/stagecraft/assets/%1/textures").arg(encodedMat),
+                {}, nullptr, &texErr);
+            if (texDoc.isObject()) {
+                QStringList attrs;
+                const QJsonArray textures = texDoc.object().value("textures").toArray();
+                for (const QJsonValue& entry : textures) {
+                    if (!entry.isArray()) continue;
+                    const QJsonArray pair = entry.toArray();
+                    if (pair.size() >= 1 && pair.at(0).isString()) attrs << pair.at(0).toString();
+                }
+                const RemixMaterialKind kind = ClassifyMaterialFromTextureAttrs(attrs);
+                materialIsTranslucent = (kind == RemixMaterialKind::Translucent);
+                if (kind == RemixMaterialKind::Unknown) {
+                    m_logger.Info("Material kind not identifiable from its texture attrs — treating as opaque.");
+                } else if (materialIsTranslucent) {
+                    m_logger.Info("Linked material is translucent (glass): only transmittance/emissive/normal are pushed.");
+                }
+            } else {
+                m_logger.Warning("Could not query the material's textures to detect its kind (" +
+                                 texErr + ") — assuming opaque.");
+            }
+        }
+        QStringList skippedForMaterialKind;
+        for (auto it = exportedFiles.begin(); it != exportedFiles.end();) {
+            QString mdlInput;
+            for (const auto& spec : kDefaultPbrSpecs) {
+                if (spec.pbrType == it.key()) {
+                    mdlInput = materialIsTranslucent ? spec.mdlInputTranslucent
+                                                     : spec.mdlInputOpaque;
+                    break;
+                }
+            }
+            if (mdlInput.isEmpty()) {
+                skippedForMaterialKind << it.key();
+                it = exportedFiles.erase(it);
+            } else {
+                ++it;
+            }
         }
 
         if (exportedFiles.isEmpty()) {
@@ -3054,7 +3896,8 @@ namespace InstaMAT2Remix {
         //     non-destructive — rather than push best-effort garbage.
         QStringList collapsedChannels;
         for (auto it = exportedFiles.constBegin(); it != exportedFiles.constEnd(); ++it) {
-            if (it.key() == "height") continue; // height is legitimately flat/1x1
+            // Uniform grayscale channels legitimately render 1x1.
+            if (ChannelMayLegitimatelyRenderFlat(it.key().toStdString())) continue;
             const QSize dim = QImageReader(it.value()).size();
             if (dim.isValid() && (dim.width() <= 1 || dim.height() <= 1)) {
                 collapsedChannels << it.key();
@@ -3126,7 +3969,8 @@ namespace InstaMAT2Remix {
                           .arg(stagedFiles.size()).arg(stageRoot, fileRoot));
 
         // 6. Ingest each texture into the Remix project.
-        QProgressDialog progress("Pushing textures to RTX Remix...", "Cancel", 0, stagedFiles.size(), nullptr);
+        QProgressDialog progress("Pushing textures to RTX Remix...", "Cancel", 0, stagedFiles.size(),
+                                 FindHostMainWindow());
         progress.setWindowTitle(kPluginName);
         progress.setWindowModality(Qt::WindowModal);
         progress.setMinimumDuration(0);
@@ -3161,17 +4005,10 @@ namespace InstaMAT2Remix {
             return;
         }
 
-        // 7. Batch-update the Remix material's texture inputs. Use kDefaultPbrSpecs
-        //    to map pbrType -> mdlInput (Shader USD attribute name).
-        QJsonArray texturePairs;
-        for (const auto& spec : kDefaultPbrSpecs) {
-            if (!ingestedPaths.contains(spec.pbrType)) continue;
-            const QString usdAttr = NormalizePathSlashes(materialPrim) + "/Shader.inputs:" + spec.mdlInput;
-            QJsonArray pair;
-            pair.append(usdAttr);
-            pair.append(NormalizePathSlashes(ingestedPaths.value(spec.pbrType)));
-            texturePairs.append(pair);
-        }
+        // 7. Batch-update the Remix material's texture inputs, routed to the
+        //    shader inputs the target material kind actually consumes.
+        const QJsonArray texturePairs =
+            BuildTexturePutPairs(materialPrim, ingestedPaths, materialIsTranslucent);
 
         QJsonObject updatePayload;
         updatePayload.insert("force", true);
@@ -3219,13 +4056,33 @@ namespace InstaMAT2Remix {
                        .arg(fileRoot)
                        .arg(m_lastExportSize.isEmpty() ? QString()
                                                        : QString(" at %1").arg(m_lastExportSize));
-        if (m_exportHadCollapse) {
-            summary += "\n\nNote: some channels rendered at 1x1. This can happen when "
-                       "the GPU is busy with other graphics-heavy applications during "
-                       "export. Close those apps and Push again for a clean render.";
+        // (No collapse note here: the collapse guard above aborts the push
+        // outright when any channel rendered 1x1, so a summary implies clean.)
+        if (!skippedNoRemixInput.isEmpty()) {
+            summary += QString("\n\nNot pushed — RTX Remix has no texture input for: %1. "
+                               "The exported file(s) remain in the export folder.")
+                           .arg(skippedNoRemixInput.join(", "));
+        }
+        if (!skippedForMaterialKind.isEmpty()) {
+            summary += QString("\n\nNot pushed — the target material is translucent (glass), "
+                               "which only takes transmittance, emissive and normal: %1.")
+                           .arg(skippedForMaterialKind.join(", "));
+        }
+        if (ingestedPaths.contains("anisotropy")) {
+            summary += "\n\nNote: an anisotropy texture was pushed, but current RTX Remix "
+                       "runtimes read the material's anisotropy constant rather than the texture.";
+        }
+        if (!m_exportGraphTypeNote.isEmpty()) {
+            summary += "\n\n" + m_exportGraphTypeNote;
+        }
+        if (!m_exportAlbedoFallbackNote.isEmpty()) {
+            summary += "\n\n" + m_exportAlbedoFallbackNote;
         }
         if (!ingestErrors.isEmpty()) {
-            summary += "\n\nIngest warnings:\n" + ingestErrors.join("\n");
+            summary += QString("\n\nWarning — %1 channel(s) could NOT be ingested and "
+                               "kept their previous texture in Remix:\n%2")
+                           .arg(ingestErrors.size())
+                           .arg(ingestErrors.join("\n"));
         }
         QMessageBox::information(nullptr, kPluginName, summary);
     }

@@ -21,3 +21,6 @@ __pycache__/
 
 # Editor/workspace
 *.code-workspace
+
+# Claude Code local hooks/settings (machine-specific)
+.claude/

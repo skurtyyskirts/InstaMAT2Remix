@@ -59,12 +59,14 @@ private:
     QLineEdit* m_tilingMeshPath = nullptr;
 
     // Pull
+    QComboBox* m_pullTemplate = nullptr;
     QCheckBox* m_autoUnwrap = nullptr;
     QCheckBox* m_useTilingMesh = nullptr;
 
     // Export
     QComboBox* m_exportFormat = nullptr;
     QComboBox* m_exportResolution = nullptr;
+    QComboBox* m_normalEncoding = nullptr;
     QCheckBox* m_includeOpacity = nullptr;
     QCheckBox* m_restoreAspect = nullptr;
 

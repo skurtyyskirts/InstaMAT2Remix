@@ -2,6 +2,7 @@
 #include <QCoreApplication>
 #include <QSettings>
 #include <QDir>
+#include <QStandardPaths>
 #include <cmath>
 #include <string>
 #include <QTemporaryDir>
@@ -16,6 +17,12 @@
 #undef private
 
 #include "MeshData.h"
+#include "PbrChannelMap.h"
+#include "ProjectTemplates.h"
+
+#include <QColor>
+#include <QImage>
+#include <QSet>
 
 class TestRemixConnector : public QObject {
     Q_OBJECT
@@ -73,12 +80,373 @@ private slots:
         // No namespace prefix — the last-colon rule degenerates to the whole string.
         QCOMPARE(IM::ResolveCanonicalChannel("diffuse_texture"), QString("albedo"));
 
+        // Remix SSS / translucency extension (deliberate deviation from WBC).
+        QCOMPARE(IM::ResolveCanonicalChannel("inputs:transmittance_texture"),
+                 QString("transmittance"));
+        QCOMPARE(IM::ResolveCanonicalChannel("inputs:subsurface_transmittance_texture"),
+                 QString("transmittance"));
+        QCOMPARE(IM::ResolveCanonicalChannel("inputs:subsurface_thickness_texture"),
+                 QString("sss_thickness"));
+        QCOMPARE(IM::ResolveCanonicalChannel("inputs:subsurface_single_scattering_texture"),
+                 QString("sss_scattering"));
+        QCOMPARE(IM::ResolveCanonicalChannel("inputs:subsurface_radius_texture"),
+                 QString("sss_radius"));
+        QCOMPARE(IM::ResolveCanonicalChannel("inputs:anisotropy_texture"),
+                 QString("anisotropy"));
+
         // Unknown suffix returns empty string.
         QCOMPARE(IM::ResolveCanonicalChannel("inputs:custom_thing"), QString());
 
         // Case sensitivity: WBC's Python table is case-sensitive. Pin the behavior
         // so future changes are deliberate.
         QCOMPARE(IM::ResolveCanonicalChannel("inputs:OPACITY_TEXTURE"), QString());
+    }
+
+    void testIngestValidationTypes_onlyValidRemixEnumNames() {
+        using IM = InstaMAT2Remix::RemixConnector;
+        // The complete set of TextureTypes enum member names the RTX Remix
+        // mass-validator accepts (toolkit-remix data_models/enums.py).
+        const QSet<QString> kValid = {
+            "DIFFUSE", "ROUGHNESS", "ANISOTROPY", "METALLIC", "EMISSIVE",
+            "NORMAL_OGL", "NORMAL_DX", "NORMAL_OTH", "HEIGHT",
+            "TRANSMITTANCE", "MEASUREMENT_DISTANCE", "SINGLE_SCATTERING", "OTHER",
+        };
+
+        const QStringList channels = {
+            "albedo", "roughness", "metallic", "emissive", "height",
+            "transmittance", "sss_thickness", "sss_scattering", "sss_radius",
+            "anisotropy", "normal",
+        };
+        for (const QString& c : channels) {
+            const QString t = IM::ResolveIngestValidationType(c, "dx");
+            QVERIFY2(kValid.contains(t),
+                     QString("%1 -> %2 is not a valid Remix ingest type").arg(c, t).toUtf8());
+        }
+
+        // The exact routings that matter.
+        QCOMPARE(IM::ResolveIngestValidationType("albedo", "dx"), QString("DIFFUSE"));
+        QCOMPARE(IM::ResolveIngestValidationType("transmittance", "dx"), QString("TRANSMITTANCE"));
+        QCOMPARE(IM::ResolveIngestValidationType("sss_thickness", "dx"), QString("MEASUREMENT_DISTANCE"));
+        QCOMPARE(IM::ResolveIngestValidationType("sss_scattering", "dx"), QString("SINGLE_SCATTERING"));
+        QCOMPARE(IM::ResolveIngestValidationType("sss_radius", "dx"), QString("OTHER"));
+        QCOMPARE(IM::ResolveIngestValidationType("anisotropy", "dx"), QString("ANISOTROPY"));
+
+        // Normal encoding resolution.
+        QCOMPARE(IM::ResolveIngestValidationType("normal", "dx"), QString("NORMAL_DX"));
+        QCOMPARE(IM::ResolveIngestValidationType("normal", "ogl"), QString("NORMAL_OGL"));
+        QCOMPARE(IM::ResolveIngestValidationType("normal", "oth"), QString("NORMAL_OTH"));
+        QCOMPARE(IM::ResolveIngestValidationType("normal", "garbage"), QString("NORMAL_DX"));
+        QCOMPARE(IM::ResolveIngestValidationType("Normal", ""), QString("NORMAL_DX"));
+
+        // The old invalid WBC-inherited names must be gone: unknown channels
+        // resolve to OTHER (raw), never AO/OPACITY/IOR/SUBSURFACE.
+        QCOMPARE(IM::ResolveIngestValidationType("ao", "dx"), QString("OTHER"));
+        QCOMPARE(IM::ResolveIngestValidationType("opacity", "dx"), QString("OTHER"));
+        QCOMPARE(IM::ResolveIngestValidationType("ior", "dx"), QString("OTHER"));
+        QCOMPARE(IM::ResolveIngestValidationType("subsurface", "dx"), QString("OTHER"));
+    }
+
+    void testClassifyMaterialFromTextureAttrs() {
+        using IM = InstaMAT2Remix::RemixConnector;
+        using Kind = IM::RemixMaterialKind;
+
+        // Opaque material.
+        QVERIFY(IM::ClassifyMaterialFromTextureAttrs(
+                    {"/RootNode/Looks/mat_A/Shader.inputs:diffuse_texture",
+                     "/RootNode/Looks/mat_A/Shader.inputs:normalmap_texture"})
+                == Kind::Opaque);
+
+        // Translucent (glass): exact transmittance_texture suffix.
+        QVERIFY(IM::ClassifyMaterialFromTextureAttrs(
+                    {"/RootNode/Looks/mat_B/Shader.inputs:transmittance_texture",
+                     "/RootNode/Looks/mat_B/Shader.inputs:normalmap_texture"})
+                == Kind::Translucent);
+
+        // The opaque SSS input must NOT be mistaken for glass.
+        QVERIFY(IM::ClassifyMaterialFromTextureAttrs(
+                    {"/RootNode/Looks/mat_C/Shader.inputs:subsurface_transmittance_texture",
+                     "/RootNode/Looks/mat_C/Shader.inputs:diffuse_texture"})
+                == Kind::Opaque);
+
+        // Nothing recognizable.
+        QVERIFY(IM::ClassifyMaterialFromTextureAttrs({"/x/Shader.inputs:custom"})
+                == Kind::Unknown);
+        QVERIFY(IM::ClassifyMaterialFromTextureAttrs({}) == Kind::Unknown);
+    }
+
+    void testBuildTexturePutPairs_routesByMaterialKind() {
+        using IM = InstaMAT2Remix::RemixConnector;
+        const QString prim = "/RootNode/Looks/mat_A3F09C4D8E12BB77";
+
+        QHash<QString, QString> ingested;
+        ingested.insert("albedo",         "C:/ing/a.rtex.dds");
+        ingested.insert("normal",         "C:/ing/n.rtex.dds");
+        ingested.insert("transmittance",  "C:/ing/t.rtex.dds");
+        ingested.insert("sss_scattering", "C:/ing/s.rtex.dds");
+
+        auto attrsOf = [](const QJsonArray& pairs) {
+            QStringList out;
+            for (const QJsonValue& v : pairs) out << v.toArray().at(0).toString();
+            return out;
+        };
+
+        // Opaque: everything routes; transmittance goes to the SSS input.
+        QStringList skipped;
+        const QJsonArray opaque = IM::BuildTexturePutPairs(prim, ingested, false, &skipped);
+        QCOMPARE(opaque.size(), 4);
+        QVERIFY(skipped.isEmpty());
+        const QStringList oa = attrsOf(opaque);
+        QVERIFY(oa.contains(prim + "/Shader.inputs:diffuse_texture"));
+        QVERIFY(oa.contains(prim + "/Shader.inputs:subsurface_transmittance_texture"));
+        QVERIFY(oa.contains(prim + "/Shader.inputs:subsurface_single_scattering_texture"));
+
+        // Translucent: only normal + transmittance survive; transmittance goes
+        // to the glass input; albedo/sss_scattering are skipped.
+        const QJsonArray glass = IM::BuildTexturePutPairs(prim, ingested, true, &skipped);
+        QCOMPARE(glass.size(), 2);
+        const QStringList ga = attrsOf(glass);
+        QVERIFY(ga.contains(prim + "/Shader.inputs:transmittance_texture"));
+        QVERIFY(ga.contains(prim + "/Shader.inputs:normalmap_texture"));
+        QVERIFY(skipped.contains("albedo"));
+        QVERIFY(skipped.contains("sss_scattering"));
+    }
+
+    void testPbrChannelMap_studioOutputAliases() {
+        using InstaMAT2Remix::MapStudioOutputToCanonicalPbr;
+        QCOMPARE(QString::fromStdString(MapStudioOutputToCanonicalPbr("Base Color")), QString("albedo"));
+        QCOMPARE(QString::fromStdString(MapStudioOutputToCanonicalPbr("Metalness")), QString("metallic"));
+        QCOMPARE(QString::fromStdString(MapStudioOutputToCanonicalPbr("Transmission")), QString("transmittance"));
+        QCOMPARE(QString::fromStdString(MapStudioOutputToCanonicalPbr("Translucency")), QString("transmittance"));
+        QCOMPARE(QString::fromStdString(MapStudioOutputToCanonicalPbr("Subsurface Scattering")), QString("sss_scattering"));
+        QCOMPARE(QString::fromStdString(MapStudioOutputToCanonicalPbr("SSS")), QString("sss_scattering"));
+        QCOMPARE(QString::fromStdString(MapStudioOutputToCanonicalPbr("Single Scattering")), QString("sss_scattering"));
+        QCOMPARE(QString::fromStdString(MapStudioOutputToCanonicalPbr("Thickness")), QString("sss_thickness"));
+        QCOMPARE(QString::fromStdString(MapStudioOutputToCanonicalPbr("Measurement Distance")), QString("sss_thickness"));
+        QCOMPARE(QString::fromStdString(MapStudioOutputToCanonicalPbr("Subsurface Radius")), QString("sss_radius"));
+        QCOMPARE(QString::fromStdString(MapStudioOutputToCanonicalPbr("Anisotropy")), QString("anisotropy"));
+        QCOMPARE(QString::fromStdString(MapStudioOutputToCanonicalPbr("Ambient Occlusion")), QString("ao"));
+        QCOMPARE(QString::fromStdString(MapStudioOutputToCanonicalPbr("Opacity")), QString("opacity"));
+        QCOMPARE(QString::fromStdString(MapStudioOutputToCanonicalPbr("Something Else")), QString());
+
+        // Generic-name aliases adopted from InstaMAT's own Blender add-on
+        // ("Output"/"Default" -> Base Color) — fresh Element Graphs and the
+        // SDK sample name their lone output "Output".
+        QCOMPARE(QString::fromStdString(MapStudioOutputToCanonicalPbr("Output")), QString("albedo"));
+        QCOMPARE(QString::fromStdString(MapStudioOutputToCanonicalPbr("Default")), QString("albedo"));
+        QCOMPARE(QString::fromStdString(MapStudioOutputToCanonicalPbr("Metal")), QString("metallic"));
+        QCOMPARE(QString::fromStdString(MapStudioOutputToCanonicalPbr("Transparency")), QString("opacity"));
+        // "Output 2" must NOT alias (normalization keeps the digit).
+        QCOMPARE(QString::fromStdString(MapStudioOutputToCanonicalPbr("Output 2")), QString());
+
+        using InstaMAT2Remix::ChannelMayLegitimatelyRenderFlat;
+        QVERIFY(ChannelMayLegitimatelyRenderFlat("height"));
+        QVERIFY(ChannelMayLegitimatelyRenderFlat("sss_thickness"));
+        QVERIFY(ChannelMayLegitimatelyRenderFlat("sss_radius"));
+        QVERIFY(!ChannelMayLegitimatelyRenderFlat("albedo"));
+        QVERIFY(!ChannelMayLegitimatelyRenderFlat("normal"));
+    }
+
+    void testWorkerErrorMessageBuilders() {
+        using namespace InstaMAT2Remix;
+
+        const QString noOutputs = QString::fromStdString(BuildNoOutputsError());
+        QVERIFY(noOutputs.contains("exposes no output parameters"));
+        QVERIFY(noOutputs.contains(QString::fromUtf8(PbrOutputNamesHint())));
+        QVERIFY(!noOutputs.contains('\n'));
+
+        const QString one = QString::fromStdString(BuildUnmappedOutputsError({"Output 3"}));
+        QVERIFY(one.contains("graph's 1 output(s)"));
+        QVERIFY(one.contains("'Output 3'"));
+        QVERIFY(one.contains(QString::fromUtf8(PbrOutputNamesHint())));
+
+        // More than 6 names: list caps at 6 and reports the overflow count.
+        std::vector<std::string> eight;
+        for (int i = 0; i < 8; ++i) eight.push_back("Out" + std::to_string(i));
+        const QString many = QString::fromStdString(BuildUnmappedOutputsError(eight));
+        QVERIFY(many.contains("graph's 8 output(s)"));
+        QVERIFY(many.contains("'Out5'"));
+        QVERIFY(!many.contains("'Out6'"));
+        QVERIFY(many.contains("(+2 more)"));
+
+        // Names with embedded newlines must not break the single-line protocol.
+        const QString hostile = QString::fromStdString(
+            BuildUnmappedOutputsError({"Bad\nName\r"}));
+        QVERIFY(!hostile.contains('\n'));
+        QVERIFY(!hostile.contains('\r'));
+    }
+
+    void testSingleOutputAlbedoFallbackGuard() {
+        using InstaMAT2Remix::ShouldFallbackLoneOutputToAlbedo;
+        // Fires: nothing mapped, exactly one unmapped image output.
+        QVERIFY(ShouldFallbackLoneOutputToAlbedo(0, 1, ""));
+        QVERIFY(ShouldFallbackLoneOutputToAlbedo(0, 1, "albedo"));
+        // Never fires when something already mapped (deliberate naming),
+        // when the count is wrong, or when --only asks for another channel.
+        QVERIFY(!ShouldFallbackLoneOutputToAlbedo(1, 1, ""));
+        QVERIFY(!ShouldFallbackLoneOutputToAlbedo(0, 2, ""));
+        QVERIFY(!ShouldFallbackLoneOutputToAlbedo(0, 0, ""));
+        QVERIFY(!ShouldFallbackLoneOutputToAlbedo(0, 1, "normal"));
+    }
+
+    void testParseWorkerStdout_fatalAndFallback() {
+        using IM = InstaMAT2Remix::RemixConnector;
+
+        // Success transcript, interleaved with engine noise the parser must
+        // route into engineTail rather than the protocol fields.
+        const QString success =
+            "...using GPU='NVIDIA GeForce RTX 5090'\n"
+            "IM2RX GRAPHTYPE=layer\n"
+            "IM2RX OUTPUTCOUNT=2\n"
+            "IM2RX CHANNEL=albedo:albedo.png\n"
+            "IM2RX CHANNEL=normal:normal.png\n"
+            "IM2RX FINALSIZE=4096x4096\n"
+            "IM2RX COLLAPSED=0\n"
+            "IM2RX DONE=ok\n";
+        IM::WorkerRunParse p = IM::ParseWorkerStdout(success);
+        QCOMPARE(p.channelFiles, QStringList({"albedo.png", "normal.png"}));
+        QVERIFY(!p.collapsed);
+        QCOMPARE(p.finalSize, QString("4096x4096"));
+        QCOMPARE(p.graphType, QString("layer"));
+        QVERIFY(p.error.isEmpty());
+        QVERIFY(p.fatalReason.isEmpty());
+        QCOMPARE(p.engineTail, QStringList({"...using GPU='NVIDIA GeForce RTX 5090'"}));
+        QVERIFY(IM::ShouldRetryWorkerFailure(p.fatalReason));
+
+        // Deterministic failure: FATAL= present -> no retry + dialog tip.
+        const QString fatal =
+            "IM2RX GRAPHTYPE=element\n"
+            "IM2RX OUTPUTCOUNT=1\n"
+            "IM2RX OUTPUTSKIP name='Custom Thing' (unmapped)\n"
+            "IM2RX FATAL=outputs\n"
+            "IM2RX ERROR=None of the graph's 1 output(s) is named after a PBR channel.\n"
+            "IM2RX DONE=fail\n";
+        p = IM::ParseWorkerStdout(fatal);
+        QVERIFY(p.channelFiles.isEmpty());
+        QCOMPARE(p.fatalReason, QString("outputs"));
+        QVERIFY(p.error.startsWith("None of the graph's 1 output(s)"));
+        QVERIFY(!IM::ShouldRetryWorkerFailure(p.fatalReason));
+        QVERIFY(IM::WorkerErrorTip(p.fatalReason).contains("Base Color"));
+        QVERIFY(IM::WorkerErrorTip("environment").isEmpty());
+        QVERIFY(IM::WorkerErrorTip(QString()).isEmpty());
+
+        // Lone-output albedo fallback: name extracted for the summary note.
+        const QString fallback =
+            "IM2RX OUTPUTCOUNT=1\n"
+            "IM2RX OUTPUTFALLBACK name='My Texture' canonical=albedo\n"
+            "IM2RX CHANNEL=albedo:albedo.png\n"
+            "IM2RX COLLAPSED=0\n"
+            "IM2RX DONE=ok\n";
+        p = IM::ParseWorkerStdout(fallback);
+        QCOMPARE(p.fallbackOutputName, QString("My Texture"));
+        QCOMPARE(p.channelFiles, QStringList({"albedo.png"}));
+
+        // Legacy worker (pre-FATAL protocol): ERROR without FATAL stays
+        // retriable — the 0.0.1 behavior.
+        const QString legacy =
+            "IM2RX ERROR=Execution succeeded but no recognized PBR channel outputs were written.\n"
+            "IM2RX DONE=fail\n";
+        p = IM::ParseWorkerStdout(legacy);
+        QVERIFY(p.fatalReason.isEmpty());
+        QVERIFY(!p.error.isEmpty());
+        QVERIFY(IM::ShouldRetryWorkerFailure(p.fatalReason));
+    }
+
+    void testMatchProjectTypeTile() {
+        using namespace InstaMAT2Remix;
+        // Simulated New Project dialog tiles (per-button scraped strings),
+        // mirroring the real Studio layout incl. the ambiguity traps.
+        const QList<QStringList> tiles = {
+            /*0*/ {"Asset Texturing", "New workflows for scalable texturing and painting."},
+            /*1*/ {"Material Layering", "Artist centric procedural material creation."},
+            /*2*/ {"Materialize Image", "Turn a regular photograph into a PBR material."},
+            /*3*/ {"Element Graph", "From beautiful materials to procedural geometry..."},
+            /*4*/ {"nPass Element Graph", "Leverage the self-repeating nPass Element Graph..."},
+            /*5*/ {"Atom Graph", "Create custom image processing nodes that can be "
+                   "instanced in any Element Graph."},
+            /*6*/ {"Function Graph", "Develop small functions..."},
+        };
+
+        QCOMPARE(MatchProjectTypeTile(tiles, GetTemplateConfig(ProjectTemplate::AssetTexturing)), 0);
+        QCOMPARE(MatchProjectTypeTile(tiles, GetTemplateConfig(ProjectTemplate::ElementGraph)), 3);
+        QCOMPARE(MatchProjectTypeTile(tiles, GetTemplateConfig(ProjectTemplate::MaterializeImage)), 2);
+
+        // No exact title present: contains-pass must still avoid nPass/Atom.
+        const QList<QStringList> noExact = {
+            {"nPass Element Graph", "self-repeating"},
+            {"Atom Graph", "instanced in any Element Graph"},
+            {"Some Element Graph Tool", "unrelated"},
+        };
+        QCOMPARE(MatchProjectTypeTile(noExact, GetTemplateConfig(ProjectTemplate::ElementGraph)), 2);
+
+        // Ambiguous exact matches -> -1.
+        const QList<QStringList> dup = {{"Element Graph"}, {"Element Graph"}};
+        QCOMPARE(MatchProjectTypeTile(dup, GetTemplateConfig(ProjectTemplate::ElementGraph)), -1);
+
+        // Nothing matches -> -1.
+        const QList<QStringList> none = {{"Material Layering"}, {"Function Graph"}};
+        QCOMPARE(MatchProjectTypeTile(none, GetTemplateConfig(ProjectTemplate::ElementGraph)), -1);
+    }
+
+    void testProjectTemplateSettingsRoundTrip() {
+        using namespace InstaMAT2Remix;
+        for (const TemplateRecipeConfig& cfg : AllTemplateConfigs()) {
+            ProjectTemplate t = ProjectTemplate::AssetTexturing;
+            QVERIFY(TemplateFromSettingsValue(QLatin1String(cfg.settingsValue), t));
+            QVERIFY(t == cfg.id);
+        }
+        ProjectTemplate t = ProjectTemplate::AssetTexturing;
+        QVERIFY(!TemplateFromSettingsValue("", t));
+        QVERIFY(!TemplateFromSettingsValue("ask", t));
+        QVERIFY(!TemplateFromSettingsValue("bogus_template", t));
+        // Case/whitespace tolerant.
+        QVERIFY(TemplateFromSettingsValue("  Element_Graph ", t));
+        QVERIFY(t == ProjectTemplate::ElementGraph);
+    }
+
+    void testMergeOpacityIntoAlbedoAlpha() {
+        using IM = InstaMAT2Remix::RemixConnector;
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+
+        // 4x4 red albedo, 4x4 opacity gradient (per-pixel gray = x*60).
+        QImage albedo(4, 4, QImage::Format_RGB32);
+        albedo.fill(QColor(200, 30, 30));
+        const QString albedoPath = tmp.path() + "/albedo.png";
+        QVERIFY(albedo.save(albedoPath));
+
+        QImage opacity(4, 4, QImage::Format_RGB32);
+        for (int y = 0; y < 4; ++y)
+            for (int x = 0; x < 4; ++x)
+                opacity.setPixel(x, y, qRgb(x * 60, x * 60, x * 60));
+        const QString opacityPath = tmp.path() + "/opacity.png";
+        QVERIFY(opacity.save(opacityPath));
+
+        QString merged, err;
+        QVERIFY2(IM::MergeOpacityIntoAlbedoAlpha(albedoPath, opacityPath, merged, err),
+                 err.toUtf8().constData());
+        QVERIFY(merged.endsWith(".png"));
+        QImage out(merged);
+        QVERIFY(!out.isNull());
+        QCOMPARE(out.size(), albedo.size());
+        const QImage outArgb = out.convertToFormat(QImage::Format_ARGB32);
+        for (int x = 0; x < 4; ++x) {
+            QCOMPARE(qAlpha(outArgb.pixel(x, 0)), x * 60); // alpha = opacity gray
+            QCOMPARE(qRed(outArgb.pixel(x, 0)), 200);      // RGB untouched
+        }
+
+        // Size mismatch: opacity is scaled to the albedo size.
+        QImage bigOpacity(8, 8, QImage::Format_RGB32);
+        bigOpacity.fill(QColor(128, 128, 128));
+        const QString bigPath = tmp.path() + "/opacity_big.png";
+        QVERIFY(bigOpacity.save(bigPath));
+        QVERIFY(IM::MergeOpacityIntoAlbedoAlpha(albedoPath, bigPath, merged, err));
+        const QImage out2 = QImage(merged).convertToFormat(QImage::Format_ARGB32);
+        QCOMPARE(out2.size(), albedo.size());
+        QCOMPARE(qAlpha(out2.pixel(1, 1)), 128);
+
+        // Missing inputs fail with a message.
+        QVERIFY(!IM::MergeOpacityIntoAlbedoAlpha(tmp.path() + "/nope.png", opacityPath, merged, err));
+        QVERIFY(!err.isEmpty());
     }
 
     void testMeshCacheDirFor_documentsRooted() {
@@ -280,9 +648,38 @@ private slots:
 
     void testDefaultLayerProjectDir_isDocumentsInstamatLibrary() {
         const QString d = InstaMAT2Remix::RemixConnector::DefaultLayerProjectDir();
-        const QString expected = QDir::cleanPath(
-            QDir::homePath() + "/Documents/InstaMAT/Library");
+        // Documents resolves via the shell known folder (OneDrive-redirected
+        // setups included), falling back to <home>/Documents.
+        QString docs = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+        if (docs.isEmpty()) docs = QDir::homePath() + "/Documents";
+        const QString expected = QDir::cleanPath(docs + "/InstaMAT/Library");
         QCOMPARE(QDir::cleanPath(d), expected);
+    }
+
+    void testIsSafeToWipe() {
+        using IM = InstaMAT2Remix::RemixConnector;
+
+        // Empty/whitespace/relative paths are never safe: QDir("") is the CWD.
+        QVERIFY(!IM::IsSafeToWipe(""));
+        QVERIFY(!IM::IsSafeToWipe("   "));
+        QVERIFY(!IM::IsSafeToWipe("relative/dir"));
+
+        // Drive roots and well-known user folders are protected.
+        QVERIFY(!IM::IsSafeToWipe("C:/"));
+        QVERIFY(!IM::IsSafeToWipe("C:\\"));
+        QVERIFY(!IM::IsSafeToWipe(QDir::homePath()));
+        const QString docs = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+        if (!docs.isEmpty()) {
+            QVERIFY(!IM::IsSafeToWipe(docs));
+            QVERIFY(!IM::IsSafeToWipe(docs.toUpper())); // case-insensitive
+        }
+
+        // Dedicated folders are fine (existence is not required — pure path logic).
+        QVERIFY(IM::IsSafeToWipe(QDir::tempPath() + "/InstaMAT2Remix_Export"));
+        QVERIFY(IM::IsSafeToWipe("C:/Some/Dedicated/ExportFolder"));
+        if (!docs.isEmpty()) {
+            QVERIFY(IM::IsSafeToWipe(docs + "/InstaMAT2Remix/Exports"));
+        }
     }
 
     void testStageSourceForIngest_copiesIntoTempStageDir() {

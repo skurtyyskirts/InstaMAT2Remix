@@ -19,6 +19,7 @@ namespace InstaMAT2Remix {
 
     const char* ExternalTools::s_unwrapScript = R"(
 import bpy
+import math
 import sys
 import os
 
@@ -49,37 +50,80 @@ def _parse_args(args):
 
     return angle_limit, island_margin, area_weight, stretch_to_bounds
 
+def _import_mesh(path):
+    ext = os.path.splitext(path)[1].lower()
+    if ext == '.obj':
+        try:
+            bpy.ops.wm.obj_import(filepath=path)          # Blender >= 3.2
+        except AttributeError:
+            bpy.ops.import_scene.obj(filepath=path)       # legacy importer
+    elif ext in ['.usd', '.usda', '.usdc']:
+        bpy.ops.wm.usd_import(filepath=path)
+    elif ext == '.fbx':
+        bpy.ops.import_scene.fbx(filepath=path)
+    elif ext in ['.gltf', '.glb']:
+        bpy.ops.import_scene.gltf(filepath=path)
+    else:
+        raise RuntimeError('unsupported mesh format: ' + ext)
+
+def _smart_project(angle_limit_deg, island_margin, area_weight, stretch_to_bounds):
+    # Blender >= 2.91: angle_limit is in RADIANS and the bounds flag is
+    # scale_to_bounds. Older releases take degrees + stretch_to_uv_bounds and
+    # would raise TypeError on the modern kwargs, hence the fallbacks.
+    try:
+        bpy.ops.uv.smart_project(
+            angle_limit=math.radians(angle_limit_deg),
+            island_margin=island_margin,
+            area_weight=area_weight,
+            scale_to_bounds=stretch_to_bounds,
+        )
+        return
+    except TypeError:
+        pass
+    try:
+        bpy.ops.uv.smart_project(
+            angle_limit=angle_limit_deg,
+            island_margin=island_margin,
+            user_area_weight=area_weight,
+            stretch_to_uv_bounds=stretch_to_bounds,
+        )
+        return
+    except TypeError:
+        pass
+    bpy.ops.uv.smart_project(
+        angle_limit=math.radians(angle_limit_deg),
+        island_margin=island_margin,
+    )
+
+def _export_obj(path):
+    try:
+        bpy.ops.wm.obj_export(filepath=path, export_selected_objects=True)  # Blender >= 3.1
+    except AttributeError:
+        bpy.ops.export_scene.obj(filepath=path, use_selection=True)         # legacy exporter
+
 def auto_unwrap(input_mesh, output_mesh, angle_limit=66.0, island_margin=0.003, area_weight=0.0, stretch_to_bounds=False):
     bpy.ops.wm.read_factory_settings(use_empty=True)
-    ext = os.path.splitext(input_mesh)[1].lower()
-    if ext == '.obj':
-        bpy.ops.wm.obj_import(filepath=input_mesh)
-    elif ext in ['.usd', '.usda', '.usdc']:
-        bpy.ops.wm.usd_import(filepath=input_mesh)
-    elif ext == '.fbx':
-        bpy.ops.import_scene.fbx(filepath=input_mesh)
-    
+    _import_mesh(input_mesh)
+
     bpy.ops.object.select_all(action='DESELECT')
+    mesh_found = False
     for obj in bpy.data.objects:
         if obj.type == 'MESH':
             obj.select_set(True)
             bpy.context.view_layer.objects.active = obj
+            mesh_found = True
+    if not mesh_found:
+        raise RuntimeError('no mesh objects were imported from ' + input_mesh)
 
     bpy.ops.object.mode_set(mode='EDIT')
     bpy.ops.mesh.select_all(action='SELECT')
-    bpy.ops.uv.smart_project(
-        angle_limit=angle_limit,
-        island_margin=island_margin,
-        area_weight=area_weight,
-        stretch_to_bounds=stretch_to_bounds,
-    )
+    _smart_project(angle_limit, island_margin, area_weight, stretch_to_bounds)
     bpy.ops.object.mode_set(mode='OBJECT')
 
     out_ext = os.path.splitext(output_mesh)[1].lower()
-    if out_ext == '.obj':
-        bpy.ops.wm.obj_export(filepath=output_mesh, export_selected_objects=True)
-    else:
-        bpy.ops.wm.obj_export(filepath=output_mesh + ".obj", export_selected_objects=True)
+    if out_ext != '.obj':
+        output_mesh = output_mesh + '.obj'
+    _export_obj(output_mesh)
 
 if __name__ == "__main__":
     argv = sys.argv
@@ -124,11 +168,15 @@ if __name__ == "__main__":
         const QString scriptPath = workDir.filePath("remix_unwrap.py");
         
         QFile scriptFile(scriptPath);
-        if (scriptFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        if (!scriptFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            qWarning() << "Could not write the Blender unwrap script:" << scriptPath;
+            return false;
+        }
+        {
             QTextStream out(&scriptFile);
             out << s_unwrapScript;
-            scriptFile.close();
         }
+        scriptFile.close();
 
         QFileInfo inputInfo(QString::fromStdString(inputMeshPath));
         QString baseName = inputInfo.baseName();

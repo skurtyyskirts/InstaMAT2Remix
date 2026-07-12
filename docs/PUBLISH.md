@@ -5,7 +5,7 @@ the repo root (`InstaMAT2RemixClaude/`) unless noted. The version is read from
 `InstaMAT2Remix/PluginInfo.h` (`kPluginVersion`) — bump it there first; it drives
 both the About dialog and the zip filename.
 
-Examples below use `v0.0.1-alpha`; substitute the version you're shipping.
+Examples below use `v0.0.2-alpha`; substitute the version you're shipping.
 
 ---
 
@@ -16,7 +16,7 @@ cd InstaMAT2Remix
 .\build_plugin.ps1                     # build + dev-install; must succeed
 cmake -S . -B build_test -G "Visual Studio 18 2026" -A x64 -DCMAKE_PREFIX_PATH="C:/Qt/6.6.3/msvc2019_64"
 cmake --build build_test --target TestRemixConnector --config Debug
-ctest --test-dir build_test -C Debug -V           # expect 16/16
+ctest --test-dir build_test -C Debug -V           # QtTest totals: 29 passed / 0 failed
 cd ..
 python -m pytest InstaMAT2Remix/tests/ -v          # expect 5/5
 cd InstaMAT2Remix
@@ -39,34 +39,51 @@ Every line must read `OK`.
 
 ---
 
-## 1. Commit + push
+## 1. Build the public snapshot + push
+
+The public repo's `main` is a **clean snapshot**, not the local dev history
+(`v0.0.1-alpha` was published as an orphan snapshot; GitHub then added
+`.github/FUNDING.yml` on top — preserve it). Do NOT `git push origin HEAD`
+from a dev branch: that would publish the private history.
 
 ```powershell
 cd ..    # repo root
-git add -A
-git status              # review: version bump, README/CHANGELOG/RELEASE_NOTES, source changes
-git commit -m "Release v0.0.1-alpha"
-git push origin HEAD
+git fetch --prune origin                 # clears stale refs from the renamed old repo
+git switch -c release/v0.0.2-alpha origin/main
+# Overlay the release tree from the dev branch, keeping FUNDING.yml:
+git checkout <dev-branch> -- .
+git checkout origin/main -- .github/FUNDING.yml
+# Strip internal-only paths (mirror the 0.0.1 snapshot exclusions).
+# benchmark/ is 30+ files of tracked CMake build junk incl. binaries;
+# docs/superpowers/ holds internal plans/specs (NOT docs/plans|specs):
+git rm -r --cached --ignore-unmatch .cursor .vscode/texconv.exe benchmark `
+  docs/history.md docs/superpowers docs/qml_accessibility_log.md `
+  docs/TESTING_GUIDE.md InstaMAT2Remix/tests/__pycache__ .claude
+git status              # review: version bump, README/CHANGELOG/RELEASE_NOTES, sources
+git diff --stat origin/main              # only intended files
+git commit -m "Release v0.0.2-alpha"
+git push origin HEAD:main
 ```
 
 ## 2. Tag
 
 ```powershell
-git tag -a v0.0.1-alpha -m "InstaMAT2Remix v0.0.1-alpha"
-git push origin v0.0.1-alpha
+git tag -a v0.0.2-alpha -m "InstaMAT2Remix v0.0.2-alpha"
+git push origin v0.0.2-alpha
 ```
 
 ## 3. Create the GitHub Release + upload the zip
 
-Mark alpha/beta builds `--prerelease` so they read as early builds (and the
-README release badge shows them via `include_prereleases`):
+Do NOT pass `--prerelease`: v0.0.1-alpha was published as a normal release, so
+`releases/latest` (which excludes prereleases) tracks the newest build only if
+every release stays non-prerelease. A prerelease v0.0.2 would leave "Latest"
+pointing at the older zip.
 
 ```powershell
-gh release create v0.0.1-alpha `
-  "InstaMAT2Remix/dist/InstaMAT2Remix-v0.0.1-alpha-win64.zip" `
-  --title "InstaMAT2Remix v0.0.1-alpha" `
+gh release create v0.0.2-alpha `
+  "InstaMAT2Remix/dist/InstaMAT2Remix-v0.0.2-alpha-win64.zip" `
+  --title "InstaMAT2Remix v0.0.2-alpha" `
   --notes-file "RELEASE_NOTES.md" `
-  --prerelease `
   --verify-tag
 ```
 

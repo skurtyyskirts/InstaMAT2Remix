@@ -1,13 +1,33 @@
-# InstaMAT2Remix v0.0.1-alpha
+# InstaMAT2Remix v0.0.2-alpha
 
-> ⚠️ **Early alpha — first public release.** This build works end-to-end but is
-> new; expect rough edges and bugs. Please file issues with your
+> ⚠️ **Early alpha.** This build works end-to-end but is new; expect rough
+> edges and bugs. Please file issues with your
 > **Diagnostics → Copy to Clipboard** output — feedback shapes the next release.
 
 The **RTX Remix Connector for InstaMAT** — pull a captured mesh from NVIDIA RTX
 Remix into a paint-ready InstaMAT project, paint your PBR material, and push the
 finished textures straight back. It's the InstaMAT counterpart of the
 Substance2Remix plugin for Substance Painter.
+
+## What's new in 0.0.2-alpha
+
+- **Pull project templates** — choose **Asset Texturing** (default), **Element
+  Graph**, or **Materialize Image** when pulling, with "remember my choice" and
+  a Settings override. Materialize Image auto-downloads the material's current
+  texture into the wizard.
+- **Full Remix PBR push set** — subsurface scattering + anisotropy channels,
+  translucent (glass) material routing, opacity merged into albedo alpha, and a
+  Normal-map encoding setting.
+- **Push works from all three templates** — the render worker now executes
+  layer, element, and materialize graphs.
+- **Element Graph push fixed** — pushes no longer fail silently on generic
+  output names: a lone unnamed image output is pushed as Base Color (with a
+  note), and real naming problems produce one fast, actionable error telling
+  you exactly which outputs it saw and what to rename them to.
+- **Fixed garbled text** in the Pull template chooser.
+- **Safer than 0.0.1** — a render that cannot come out clean now aborts the
+  push with Remix untouched; the Export Folder can never wipe an unintended
+  directory; menu double-clicks can't interleave operations.
 
 ## Highlights
 
@@ -24,7 +44,7 @@ Substance2Remix plugin for Substance Painter.
 
 ## Install
 
-1. Download `InstaMAT2Remix-v0.0.1-alpha-win64.zip` below and unzip it.
+1. Download `InstaMAT2Remix-v0.0.2-alpha-win64.zip` below and unzip it.
 2. Close InstaMAT Studio.
 3. Run: `powershell -ExecutionPolicy Bypass -File .\install.ps1`
 4. Start RTX Remix Toolkit (with a project open), then InstaMAT Studio.
@@ -44,8 +64,12 @@ Microsoft Visual C++ runtime are all bundled. Nothing else to install.
 ## Known limitations
 
 - Some channels can intermittently render at 1×1 when the GPU is busy; the
-  plugin retries automatically and warns you in the Push summary — close
-  GPU-heavy apps (reboot if needed) and Push again.
+  plugin retries with fresh helper processes and **aborts the push** (Remix
+  untouched) if no clean render is possible — close GPU-heavy apps (reboot if
+  needed) and Push again.
+- Element Graph pushes read your **graph output parameters**: name them after
+  PBR channels (Base Color, Roughness, Metallic, Normal, Height, Emissive,
+  Opacity…). A single generically-named image output is pushed as Base Color.
 - Single selected mesh only (multi-mesh bundling not yet ported).
 - Imported textures must be dragged onto their channels manually.
 

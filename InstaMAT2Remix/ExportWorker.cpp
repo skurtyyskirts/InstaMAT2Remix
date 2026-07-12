@@ -22,11 +22,17 @@
 //   IM2RX AUTH=<ok|fail>               IM2RX INIT=<gpu|cpu|fail>
 //   IM2RX LIBRARY=<ok|skip|fail>       IM2RX GRAPH=<name>
 //   IM2RX RUNG rung=<name> bind=<...> execute=<...>
+//   IM2RX OUTPUTCOUNT=<n>              IM2RX OUTPUTSKIP name='<n>' (<why>)
+//   IM2RX OUTPUTFALLBACK name='<n>' canonical=albedo
 //   IM2RX CHANNEL=<canonical>:<filename>
+//   IM2RX FATAL=<usage|environment|project|outputs>   (deterministic failure —
+//                the plugin must NOT retry; always followed by ERROR=)
 //   IM2RX ERROR=<message>              IM2RX DONE=<ok|fail>
-// Exit code 0 iff DONE=ok.
+// Exit code 0 iff DONE=ok. Old plugins ignore unknown lines; a failure
+// without FATAL= is treated as transient (retriable) — today's behavior.
 
 #include "InstaMATAPI.h"
+#include "PbrChannelMap.h"
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX  // keep std::min/std::max usable (windows.h defines min/max macros)
@@ -78,35 +84,22 @@ int Fail(const std::string& message) {
     return 1;
 }
 
-// Maps an InstaMAT Layering / Asset Texturing project output name (e.g.
-// "Base Color", "Metalness") to the canonical Remix PBR channel name.
-// Case-insensitive, ignores spaces/underscores/dashes. This is the only
-// copy — the plugin no longer walks layer-graph outputs in-process.
-std::string MapStudioOutputToCanonicalPbr(const std::string& outputName) {
-    std::string s;
-    s.reserve(outputName.size());
-    for (char c : outputName) {
-        if (c == ' ' || c == '_' || c == '-') continue;
-        s.push_back(static_cast<char>(::tolower(static_cast<unsigned char>(c))));
-    }
-    static const std::unordered_map<std::string, std::string> kStudioToCanonical = {
-        {"basecolor", "albedo"},   {"basecolour", "albedo"},   {"albedo", "albedo"},
-        {"diffuse", "albedo"},     {"color", "albedo"},        {"colour", "albedo"},
-        {"normal", "normal"},      {"normalmap", "normal"},
-        {"roughness", "roughness"},
-        {"metallic", "metallic"},  {"metalness", "metallic"},
-        {"emissive", "emissive"},  {"emission", "emissive"},   {"emissivecolor", "emissive"},
-        {"emissivecolour", "emissive"}, {"emissivemask", "emissive"},
-        {"height", "height"},      {"displacement", "height"},
-        {"opacity", "opacity"},    {"alpha", "opacity"},
-        {"ao", "ao"},              {"ambientocclusion", "ao"},
-    };
-    const auto it = kStudioToCanonical.find(s);
-    return it == kStudioToCanonical.end() ? std::string() : it->second;
+// Deterministic failure: a fresh worker process would fail identically, so
+// the plugin must not burn its retry ladder on it. Reason tokens: usage,
+// environment, project, outputs — the plugin appends a rename tip for
+// "outputs".
+int FailFatal(const char* reason, const std::string& message) {
+    Say("FATAL=%s", reason);
+    return Fail(message);
 }
 
+// The Studio-output-name -> canonical-PBR-channel mapping lives in the shared
+// PbrChannelMap.h (used verbatim here and by the plugin's tests).
+using InstaMAT2Remix::MapStudioOutputToCanonicalPbr;
+using InstaMAT2Remix::ChannelMayLegitimatelyRenderFlat;
+
 int BitsForCanonical(const std::string& canonical) {
-    return canonical == "height" ? 16 : 8; // mirrors kDefaultPbrSpecs
+    return canonical == "height" ? 16 : 8;
 }
 
 // Reads the resolution the user baked the project at. InstaMAT stores it in a
@@ -184,11 +177,12 @@ bool DeallocExecutionGuarded(InstaMAT::IInstaMAT* api, InstaMAT::IElementExecuti
     }
 }
 
+int g_progressLastDecile = -1; // reset before each Execute (see TryRung)
+
 bool ProgressDelegate(const InstaMAT::IGraph&, const float progress) {
-    static int lastDecile = -1;
     const int decile = static_cast<int>(progress * 10.0f);
-    if (decile > lastDecile) {
-        lastDecile = decile;
+    if (decile > g_progressLastDecile) {
+        g_progressLastDecile = decile;
         Say("PROGRESS=%d", decile * 10);
     }
     return true; // never abort
@@ -200,6 +194,7 @@ struct Options {
     std::string impPath;
     std::string outDir;
     std::string meshPath;
+    std::string imagePath; // Materialize source image (bytes-bound like the mesh)
     std::string studioDir = "C:\\Program Files\\InstaMAT Studio";
     std::string format = "png"; // png|tga|jpg
     std::string backend = "gpu"; // gpu|cpu
@@ -222,6 +217,20 @@ struct Options {
     unsigned height = 0;
 };
 
+// std::stoul throws on non-numeric input, which would abort the process
+// without an IM2RX ERROR/DONE line — parse defensively instead.
+bool ParseUnsigned(const std::string& v, unsigned& out) {
+    if (v.empty()) return false;
+    unsigned long acc = 0;
+    for (char c : v) {
+        if (c < '0' || c > '9') return false;
+        acc = acc * 10ul + static_cast<unsigned long>(c - '0');
+        if (acc > 0xFFFFFFFFul) return false;
+    }
+    out = static_cast<unsigned>(acc);
+    return true;
+}
+
 bool ParseArgs(int argc, wchar_t** argv, Options& opt, std::string& err) {
     for (int i = 1; i < argc; ++i) {
         const std::string a = Narrow(argv[i]);
@@ -230,12 +239,18 @@ bool ParseArgs(int argc, wchar_t** argv, Options& opt, std::string& err) {
             into = Narrow(argv[++i]);
             return true;
         };
-        std::string v;
+        auto nextUnsigned = [&](unsigned& into) -> bool {
+            std::string v;
+            if (!next(v)) return false;
+            if (!ParseUnsigned(v, into)) { err = "invalid number for " + a + ": " + v; return false; }
+            return true;
+        };
         if (a == "--probe") opt.probe = true;
         else if (a == "--no-library") opt.skipLibrary = true;
         else if (a == "--imp") { if (!next(opt.impPath)) return false; }
         else if (a == "--out") { if (!next(opt.outDir)) return false; }
         else if (a == "--mesh") { if (!next(opt.meshPath)) return false; }
+        else if (a == "--image") { if (!next(opt.imagePath)) return false; }
         else if (a == "--studio") { if (!next(opt.studioDir)) return false; }
         else if (a == "--format") { if (!next(opt.format)) return false; }
         else if (a == "--backend") { if (!next(opt.backend)) return false; }
@@ -245,12 +260,12 @@ bool ParseArgs(int argc, wchar_t** argv, Options& opt, std::string& err) {
         else if (a == "--no-plugins") opt.noPlugins = true;
         else if (a == "--diag") opt.diag = true;
         else if (a == "--rawout") opt.rawOut = true;
-        else if (a == "--sleepms") { if (!next(v)) return false; opt.sleepMs = static_cast<unsigned>(std::stoul(v)); }
+        else if (a == "--sleepms") { if (!nextUnsigned(opt.sleepMs)) return false; }
         else if (a == "--noretry") opt.noRetry = true;
         else if (a == "--only") { if (!next(opt.only)) return false; }
-        else if (a == "--retries") { if (!next(v)) return false; opt.retries = static_cast<unsigned>(std::stoul(v)); }
-        else if (a == "--width") { if (!next(v)) return false; opt.width = static_cast<unsigned>(std::stoul(v)); }
-        else if (a == "--height") { if (!next(v)) return false; opt.height = static_cast<unsigned>(std::stoul(v)); }
+        else if (a == "--retries") { if (!nextUnsigned(opt.retries)) return false; }
+        else if (a == "--width") { if (!nextUnsigned(opt.width)) return false; }
+        else if (a == "--height") { if (!nextUnsigned(opt.height)) return false; }
         else { err = "unknown argument: " + a; return false; }
     }
     if (!opt.probe && (opt.impPath.empty() || opt.outDir.empty())) {
@@ -279,7 +294,8 @@ InstaMAT::IElementExecution* TryRung(InstaMAT::IInstaMAT& api,
                                      RungMode mode,
                                      const Options& opt,
                                      unsigned width,
-                                     unsigned height) {
+                                     unsigned height,
+                                     bool* executeAttempted) {
     InstaMAT::IElementExecution* exec = api.AllocElementExecution();
     if (!exec) {
         Say("RUNG rung=%s bind=n/a execute=skipped (AllocElementExecution failed)", RungName(mode));
@@ -333,6 +349,18 @@ InstaMAT::IElementExecution* TryRung(InstaMAT::IInstaMAT& api,
     switch (mode) {
     case RungMode::Inherit: {
         if (!meshVar) { bindNote = "ok (graph has no ElementMesh input)"; break; }
+        // A real mesh input with only its saved pkg:// binding renders BLANK
+        // outputs in a standalone process (the URL doesn't resolve here —
+        // headless-verified 2026-07-06). Refuse UNCONDITIONALLY (not only when
+        // a mesh file was supplied — a stale layer project reached without
+        // --mesh must fail, not blank-push) unless the rung was forced for
+        // debugging. Graphs without a mesh input pass through above.
+        if (opt.forceRung.empty()) {
+            bindOk = false;
+            bindNote = "skip: inherited pkg:// mesh bindings render blank outputs "
+                       "standalone; a mesh file bytes bind is required";
+            break;
+        }
         const char* url = meshVar->GetResourceURLValue();
         if (!url || !*url) { bindOk = false; bindNote = "skip: instance has no inherited mesh binding"; }
         else bindNote = std::string("ok (inherited ") + url + ")";
@@ -366,13 +394,57 @@ InstaMAT::IElementExecution* TryRung(InstaMAT::IInstaMAT& api,
     }
     }
 
+    // Materialize source image: bytes-bind the first ElementImage input when
+    // the caller supplied one (a package's own image binding may not resolve
+    // standalone — the same failure mode as meshes).
+    if (bindOk && !opt.imagePath.empty()) {
+        InstaMAT::IGraphVariable* imageVar = nullptr;
+        if (InstaMAT::IGraph* instance = exec->GetInstance()) {
+            const InstaMAT::uint32 inCount = instance->GetParameterCount(InstaMAT::IGraph::ParameterTypeInput);
+            for (InstaMAT::uint32 i = 0; i < inCount; ++i) {
+                InstaMAT::IGraphVariable* var = instance->GetParameterAtIndex(i, InstaMAT::IGraph::ParameterTypeInput);
+                if (!var) continue;
+                const InstaMAT::uint32 vt = var->GetVariableTypeValue();
+                if (vt == InstaMAT::IGraphVariable::TypeElementImage ||
+                    vt == InstaMAT::IGraphVariable::TypeElementImageGray) {
+                    imageVar = var;
+                    break;
+                }
+            }
+        }
+        if (!imageVar) {
+            bindNote += " (no ElementImage input for --image; package binding kept)";
+        } else {
+            std::ifstream f(Widen(opt.imagePath), std::ios::binary);
+            if (!f) {
+                bindOk = false;
+                bindNote = "skip: cannot read image file (" + opt.imagePath + ")";
+            } else {
+                std::vector<char> bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+                const std::string name = fs::path(Widen(opt.imagePath)).filename().u8string();
+                if (exec->SetResourceForGraphVariable(*imageVar, name.c_str(), bytes.data(),
+                                                      static_cast<InstaMAT::uint64>(bytes.size()))) {
+                    bindNote += " (+image bytes)";
+                } else {
+                    bindOk = false;
+                    bindNote = "skip: SetResourceForGraphVariable(image) returned false";
+                }
+            }
+        }
+    }
+
     if (!bindOk) {
         DeallocExecutionGuarded(&api, exec);
         Say("RUNG rung=%s bind=%s execute=skipped", RungName(mode), bindNote.c_str());
         return nullptr;
     }
 
+    g_progressLastDecile = -1;
     unsigned long sehCode = 0;
+    // Everything above is a deterministic bind refusal; from here on a
+    // failure may be the driver-transient render race — the caller uses this
+    // to decide whether an all-rungs failure is worth a fresh-process retry.
+    if (executeAttempted) *executeAttempted = true;
     const bool ok = ExecuteGuarded(exec, &ProgressDelegate, &sehCode);
     if (!ok) {
         if (sehCode != 0) Say("RUNG rung=%s bind=%s execute=SEH 0x%08lX", RungName(mode), bindNote.c_str(), sehCode);
@@ -389,6 +461,15 @@ struct ExportOutcome {
     int written = 0;         // channels written to disk
     bool collapsed = false;  // a color/normal channel came out 1x1 while others were full
     unsigned maxDim = 0;     // largest channel width produced
+    // Diagnostics for the written==0 case: distinguish "graph exposes no
+    // outputs" from "outputs exist but none is named after a PBR channel"
+    // from "--only filtered everything" from "sampler/write failures".
+    unsigned outputTotal = 0;               // GetParameterCount(ParameterTypeOutput)
+    int mappedMatched = 0;                  // mapped by name AND passed --only
+    std::vector<std::string> unmappedNames; // outputs MapStudioOutputToCanonicalPbr rejected
+    bool albedoFallback = false;            // lone unmapped image output exported as albedo
+    std::string fallbackOutputName;
+    bool executeAttempted = false;          // some rung got past bind to Execute
 };
 
 // Runs the rung ladder at (width,height), then the two-pass output walk into
@@ -406,16 +487,23 @@ ExportOutcome RunExportAtSize(InstaMAT::IInstaMAT& api, InstaMAT::IGraph& layerG
     //  - url: the standalone engine cannot read file:/// resources → same.
     //  - bytes: SetResourceForGraphVariable(raw file bytes) → the layer stack
     //    composites correctly.
+    // No Url rung in the default ladders: file:/// resources are documented to
+    // never resolve standalone (Execute "succeeds" with blank outputs), so it
+    // exists only behind the --rung debug flag. With a mesh file supplied,
+    // Bytes is the one correct bind; Inherit stays as the fallback for graphs
+    // that genuinely have no ElementMesh input (it refuses otherwise).
     std::vector<RungMode> ladder;
     if (opt.forceRung == "inherit")    ladder = {RungMode::Inherit};
     else if (opt.forceRung == "url")   ladder = {RungMode::Url};
     else if (opt.forceRung == "bytes") ladder = {RungMode::Bytes};
-    else if (!opt.meshPath.empty())    ladder = {RungMode::Bytes, RungMode::Url, RungMode::Inherit};
-    else                               ladder = {RungMode::Inherit, RungMode::Url, RungMode::Bytes};
+    else if (!opt.meshPath.empty())    ladder = {RungMode::Bytes, RungMode::Inherit};
+    else                               ladder = {RungMode::Inherit};
 
     InstaMAT::IElementExecution* exec = nullptr;
     for (const RungMode mode : ladder) {
-        exec = TryRung(api, layerGraph, mode, opt, width, height);
+        bool attempted = false;
+        exec = TryRung(api, layerGraph, mode, opt, width, height, &attempted);
+        out.executeAttempted = out.executeAttempted || attempted;
         if (exec) break;
     }
     if (!exec) return out; // executed=false
@@ -445,7 +533,23 @@ ExportOutcome RunExportAtSize(InstaMAT::IInstaMAT& api, InstaMAT::IGraph& layerG
     };
     std::vector<Pending> pending;
 
+    // Pre-scan: resolve every output's name/type/canonical channel BEFORE any
+    // sampler is allocated, so unmapped outputs show up in the log
+    // (OUTPUTSKIP) and the lone-output albedo fallback can decide with the
+    // full picture. Fresh Element Graphs expose generically-named outputs —
+    // silently skipping them here was the "no recognized PBR channel outputs"
+    // bug (2026-07-12).
+    struct Scanned {
+        InstaMAT::IGraphVariable* var;
+        std::string outputName;
+        std::string canonical;  // empty = unmapped
+        bool isImage;
+    };
+    std::vector<Scanned> scanned;
+
     const InstaMAT::uint32 outputCount = instance->GetParameterCount(InstaMAT::IGraph::ParameterTypeOutput);
+    out.outputTotal = outputCount;
+    Say("OUTPUTCOUNT=%u", outputCount);
     for (InstaMAT::uint32 i = 0; i < outputCount; ++i) {
         InstaMAT::IGraphVariable* var = instance->GetParameterAtIndex(i, InstaMAT::IGraph::ParameterTypeOutput);
         if (!var) continue;
@@ -453,9 +557,57 @@ ExportOutcome RunExportAtSize(InstaMAT::IInstaMAT& api, InstaMAT::IGraph& layerG
         if (!varObj) continue;
         const char* rawName = varObj->GetName(true);
         const std::string outputName = rawName ? rawName : "";
-        const std::string canonical = MapStudioOutputToCanonicalPbr(outputName);
-        if (canonical.empty()) continue;
-        if (!opt.only.empty() && canonical != opt.only) continue;
+        const InstaMAT::uint32 vt = var->GetVariableTypeValue();
+        const bool isImage = (vt == InstaMAT::IGraphVariable::TypeElementImage ||
+                              vt == InstaMAT::IGraphVariable::TypeElementImageGray);
+        scanned.push_back({var, outputName, MapStudioOutputToCanonicalPbr(outputName), isImage});
+    }
+
+    int unmappedImageOutputs = 0;
+    std::vector<char> exportable(scanned.size(), 0);
+    for (size_t i = 0; i < scanned.size(); ++i) {
+        Scanned& s = scanned[i];
+        if (s.canonical.empty()) {
+            Say("OUTPUTSKIP name='%s' (unmapped)",
+                InstaMAT2Remix::PbrSanitizeForProtocolLine(s.outputName).c_str());
+            out.unmappedNames.push_back(s.outputName);
+            if (s.isImage) ++unmappedImageOutputs;
+            continue;
+        }
+        if (!opt.only.empty() && s.canonical != opt.only) {
+            Say("OUTPUTSKIP name='%s' (filtered by --only=%s)",
+                InstaMAT2Remix::PbrSanitizeForProtocolLine(s.outputName).c_str(),
+                opt.only.c_str());
+            continue;
+        }
+        exportable[i] = 1;
+        ++out.mappedMatched;
+    }
+
+    // Lone-output fallback: nothing mapped but exactly one unmapped image
+    // output → export it as albedo ("generate a texture, push it" — mirrors
+    // InstaMAT's own Blender add-on treating generic outputs as Base Color).
+    if (InstaMAT2Remix::ShouldFallbackLoneOutputToAlbedo(out.mappedMatched,
+                                                         unmappedImageOutputs, opt.only)) {
+        for (size_t i = 0; i < scanned.size(); ++i) {
+            Scanned& s = scanned[i];
+            if (!s.canonical.empty() || !s.isImage) continue;
+            s.canonical = "albedo";
+            exportable[i] = 1;
+            ++out.mappedMatched;
+            out.albedoFallback = true;
+            out.fallbackOutputName = s.outputName;
+            Say("OUTPUTFALLBACK name='%s' canonical=albedo",
+                InstaMAT2Remix::PbrSanitizeForProtocolLine(s.outputName).c_str());
+            break;
+        }
+    }
+
+    for (size_t i = 0; i < scanned.size(); ++i) {
+        if (!exportable[i]) continue;
+        InstaMAT::IGraphVariable* var = scanned[i].var;
+        const std::string& outputName = scanned[i].outputName;
+        const std::string& canonical = scanned[i].canonical;
 
         InstaMAT::IGraphVariable* finalVar = opt.rawOut
             ? nullptr : exec->GetCompositionGraphOutputForOutputParameter(*var);
@@ -480,6 +632,19 @@ ExportOutcome RunExportAtSize(InstaMAT::IInstaMAT& api, InstaMAT::IGraph& layerG
     for (const Pending& p : pending) {
         out.maxDim = (std::max)(out.maxDim, static_cast<unsigned>(p.sampler->GetWidth()));
     }
+    // Total collapse: EVERY channel came out 1x1 while a real size was
+    // requested. The per-channel check below compares against maxDim and
+    // cannot see this case, which used to report COLLAPSED=0 and defeat the
+    // plugin's fresh-process retry. (Unless every output is a legitimately
+    // flat channel — then 1x1 across the board is valid.)
+    if (!pending.empty() && width > 1 && out.maxDim <= 1) {
+        for (const Pending& p : pending) {
+            if (!ChannelMayLegitimatelyRenderFlat(p.canonical)) {
+                out.collapsed = true;
+                break;
+            }
+        }
+    }
 
     bool sizeReported = false;
     for (const Pending& p : pending) {
@@ -491,9 +656,9 @@ ExportOutcome RunExportAtSize(InstaMAT::IInstaMAT& api, InstaMAT::IGraph& layerG
 
         // A color/normal/roughness/metalness channel that came out 1x1 while
         // another channel rendered full is the standalone SDK's high-res
-        // collapse (height is excluded — it is legitimately flat/1x1 when the
-        // project has no height data).
-        if (out.maxDim > 1 && w <= 1 && p.canonical != "height") {
+        // collapse (uniform grayscale channels like height/thickness/radius
+        // are excluded — they legitimately render flat/1x1).
+        if (out.maxDim > 1 && w <= 1 && !ChannelMayLegitimatelyRenderFlat(p.canonical)) {
             out.collapsed = true;
         }
 
@@ -526,9 +691,23 @@ int wmain(int argc, wchar_t** argv) {
     Options opt;
     std::string argErr;
     if (!ParseArgs(argc, argv, opt, argErr)) {
-        return Fail(argErr + " — usage: InstaMAT2RemixExport.exe [--probe] --imp <file> --out <dir> "
+        return FailFatal("usage",
+                    argErr + " — usage: InstaMAT2RemixExport.exe [--probe] --imp <file> --out <dir> "
                              "[--width N] [--height N] [--format png|tga|jpg] [--mesh <file>] "
-                             "[--studio <dir>] [--backend gpu|cpu] [--no-library]");
+                             "[--image <file>] [--studio <dir>] [--backend gpu|cpu] [--no-library]");
+    }
+
+    // Verify the output directory is writable BEFORE the expensive SDK init;
+    // a failure here used to surface only after a full render as a misleading
+    // "no recognized PBR channel outputs" (times the plugin's retries).
+    if (!opt.probe) {
+        std::error_code outDirEc;
+        fs::create_directories(Widen(opt.outDir), outDirEc);
+        if (outDirEc) {
+            return FailFatal("environment",
+                        "Cannot create the output directory: " + opt.outDir +
+                        " (" + outDirEc.message() + ")");
+        }
     }
 
     // 1. Host the SDK from the Studio installation.
@@ -537,7 +716,8 @@ int wmain(int argc, wchar_t** argv) {
     const std::wstring dllPath = studioW + L"\\InstaMAT.dll";
     HMODULE mod = LoadLibraryW(dllPath.c_str());
     if (!mod) {
-        return Fail("LoadLibrary failed for " + opt.studioDir + "\\InstaMAT.dll (error " +
+        return FailFatal("environment",
+                    "LoadLibrary failed for " + opt.studioDir + "\\InstaMAT.dll (error " +
                     std::to_string(GetLastError()) + ")");
     }
 
@@ -546,7 +726,8 @@ int wmain(int argc, wchar_t** argv) {
     const auto getInstaMAT = reinterpret_cast<pfnGetInstaMAT>(
         GetProcAddress(mod, "GetInstaMAT"));
     if (!getBuildDate || !getInstaMAT) {
-        return Fail("GetInstaMAT/GetInstaMATBuildDate exports not found in InstaMAT.dll");
+        return FailFatal("environment",
+                    "GetInstaMAT/GetInstaMATBuildDate exports not found in InstaMAT.dll");
     }
 
     InstaMAT::int32 dllVersion = 0;
@@ -556,14 +737,15 @@ int wmain(int argc, wchar_t** argv) {
     // Same major-match rule as PluginMain.cpp: minor bumps are additive, so
     // request the DLL's own version to pass its equality gate.
     if ((dllVersion >> 16) != (INSTAMAT_API_VERSION >> 16)) {
-        return Fail("SDK major version mismatch (headers " +
+        return FailFatal("environment",
+                    "SDK major version mismatch (headers " +
                     std::to_string(INSTAMAT_API_VERSION >> 16) + ", dll " +
                     std::to_string(dllVersion >> 16) + ")");
     }
 
     InstaMAT::IInstaMAT* api = nullptr;
     if (getInstaMAT(dllVersion, &api) != 1u || !api) {
-        return Fail("GetInstaMAT failed");
+        return FailFatal("environment", "GetInstaMAT failed");
     }
 
     // 2. Authorization: NULL storage path = the shared machine license
@@ -602,8 +784,11 @@ int wmain(int argc, wchar_t** argv) {
                             std::chrono::steady_clock::now() - t0).count();
     Say("INIT=%s (%lld ms)", initOk ? backendUsed.c_str() : "fail", static_cast<long long>(initMs));
     if (!initOk) {
+        // The GPU→CPU in-process retry above already absorbed the transient
+        // case; a double init failure is licensing/installation.
         const char* info = api->GetAuthorizationInformation();
-        return Fail(std::string("SDK Initialize failed. Authorization info: ") + (info ? info : "?"));
+        return FailFatal("environment",
+                    std::string("SDK Initialize failed. Authorization info: ") + (info ? info : "?"));
     }
 
     if (opt.probe) {
@@ -631,27 +816,66 @@ int wmain(int argc, wchar_t** argv) {
     InstaMAT::IGraphObject** objs = nullptr;
     if (!api->GetGraphObjectsInPackage(*pkg, &objs) || !objs) {
         api->DeallocPackage(pkg);
-        return Fail("GetGraphObjectsInPackage returned nothing for: " + opt.impPath);
+        return FailFatal("project",
+                    "GetGraphObjectsInPackage returned nothing for: " + opt.impPath);
     }
+
+    // Tiered graph selection: layering graphs first (Asset Texturing /
+    // Material Layering projects), then plain Element graphs, then Materialize
+    // graphs — so all Pull templates can be pushed. NPass/Atom/Function graphs
+    // stay rejected (no PBR output contract).
+    struct GraphTier {
+        const char* label;
+        InstaMAT::uint32 typeA;
+        InstaMAT::uint32 typeB;
+    };
+    static const GraphTier kGraphTiers[] = {
+        {"layer",       InstaMAT::IGraph::GraphTypeElementLayer,
+                        InstaMAT::IGraph::GraphTypeElementMaterialLayer},
+        {"element",     InstaMAT::IGraph::GraphTypeElement,
+                        InstaMAT::IGraph::GraphTypeElement},
+        {"materialize", InstaMAT::IGraph::GraphTypeMaterialize,
+                        InstaMAT::IGraph::GraphTypeMaterialize},
+    };
 
     InstaMAT::IGraph* layerGraph = nullptr;
     std::string layerGraphName;
-    for (InstaMAT::uint32 i = 0; objs[i] != nullptr; ++i) {
-        InstaMAT::IGraph* g = objs[i]->AsGraph();
-        if (!g) continue;
-        const InstaMAT::uint32 gtype = g->GetGraphTypeUI32();
-        if (gtype != InstaMAT::IGraph::GraphTypeElementLayer &&
-            gtype != InstaMAT::IGraph::GraphTypeElementMaterialLayer) continue;
-        layerGraph = g;
-        const char* name = objs[i]->GetName(true);
-        layerGraphName = name ? name : "";
-        break;
+    std::string graphTypeLabel;
+    std::string typesSeen;
+    for (const GraphTier& tier : kGraphTiers) {
+        int tierCount = 0;
+        for (InstaMAT::uint32 i = 0; objs[i] != nullptr; ++i) {
+            InstaMAT::IGraph* g = objs[i]->AsGraph();
+            if (!g) continue;
+            const InstaMAT::uint32 gtype = g->GetGraphTypeUI32();
+            if (gtype != tier.typeA && gtype != tier.typeB) continue;
+            ++tierCount;
+            if (!layerGraph) {
+                layerGraph = g;
+                graphTypeLabel = tier.label;
+                const char* name = objs[i]->GetName(true);
+                layerGraphName = name ? name : "";
+            }
+        }
+        if (tierCount > 0) Say("GRAPHTIER tier=%s count=%d", tier.label, tierCount);
+        if (layerGraph) break;
     }
     if (!layerGraph) {
+        for (InstaMAT::uint32 i = 0; objs[i] != nullptr; ++i) {
+            InstaMAT::IGraph* g = objs[i]->AsGraph();
+            if (!g) continue;
+            const char* ts = g->GetGraphTypeString();
+            if (!typesSeen.empty()) typesSeen += ", ";
+            typesSeen += (ts && *ts) ? ts : std::to_string(g->GetGraphTypeUI32());
+        }
         api->DeallocPackage(pkg);
-        return Fail("No ElementLayer / ElementMaterialLayer graph in: " + opt.impPath);
+        return FailFatal("project",
+                    "No layer/element/materialize graph in: " + opt.impPath +
+                    (typesSeen.empty() ? std::string(" (no graphs at all)")
+                                       : (" (graph types found: " + typesSeen + ")")));
     }
     Say("GRAPH=%s", layerGraphName.c_str());
+    Say("GRAPHTYPE=%s", graphTypeLabel.c_str());
 
     // 5. Resolve the export size. Explicit --width/--height wins (the plugin
     // passes it for a fixed ExportResolution setting). Otherwise Auto → the
@@ -687,10 +911,28 @@ int wmain(int argc, wchar_t** argv) {
     api->DeallocPackage(pkg);
     api->ShutdownBackend();
 
-    if (!outcome.executed)
+    if (!outcome.executed) {
+        // Bind refusals (pkg:// mesh, unreadable files) are deterministic;
+        // only a failure that reached Execute may be the driver-transient
+        // render race and is worth the plugin's fresh-process retry.
+        if (!outcome.executeAttempted)
+            return FailFatal("project",
+                        "Could not execute the layer project (every bind attempt "
+                        "was refused — see RUNG lines).");
         return Fail("Could not execute the layer project (all rungs failed — see RUNG lines).");
-    if (outcome.written == 0)
-        return Fail("Execution succeeded but no recognized PBR channel outputs were written.");
+    }
+    if (outcome.written == 0) {
+        if (outcome.outputTotal == 0)
+            return FailFatal("outputs", InstaMAT2Remix::BuildNoOutputsError());
+        if (outcome.mappedMatched == 0 && !outcome.unmappedNames.empty())
+            return FailFatal("outputs",
+                        InstaMAT2Remix::BuildUnmappedOutputsError(outcome.unmappedNames));
+        if (outcome.mappedMatched == 0)
+            return FailFatal("usage",
+                        "--only=" + opt.only + " matched none of the graph's mapped outputs.");
+        return Fail("Recognized PBR outputs were found but none could be exported "
+                    "(sampler or file-write failures — see CHANNELFAIL lines).");
+    }
 
     Say("FINALSIZE=%ux%u", width, height);
     if (outcome.collapsed) {
