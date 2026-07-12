@@ -46,6 +46,8 @@ jobs:
           modules: qtwebsockets
           dir: C:\Qt
           cache: true
+          # See build.yml: new py7zr 1.x breaks aqt's Qt archive extraction.
+          py7zrversion: "==0.22.0"
 
       - name: Setup MSVC environment
         uses: ilammy/msvc-dev-cmd@v1

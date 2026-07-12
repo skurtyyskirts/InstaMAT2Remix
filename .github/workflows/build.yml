@@ -28,6 +28,12 @@ jobs:
           modules: qtwebsockets
           dir: C:\Qt
           cache: true
+          # Unpinned py7zr resolved to the new 1.x line (brotli/zstd), whose
+          # stricter path check aborts Qt archive extraction with
+          # "Bad7zFile: Specified path is bad: .../Qt6SvgWidgetsd.prl"
+          # (observed 2026-07-12, aqtinstall 3.1.21). 0.22.0 is the version
+          # the aqt 3.1.x line was built against.
+          py7zrversion: "==0.22.0"
 
       - name: Setup MSVC environment
         uses: ilammy/msvc-dev-cmd@v1
